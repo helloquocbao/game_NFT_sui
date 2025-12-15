@@ -153,6 +153,8 @@ export default function Play() {
       gameContainerRef.current.innerHTML = "";
     }
 
+    if (!gameContainerRef.current) return;
+
     try {
       k = kaboom({
         width,
@@ -229,16 +231,23 @@ export default function Play() {
         "coin",
       ];
 
-      tilesDef["@"] = () => [
-        k.rect(24, 24),
-        k.color(59, 130, 246),
-        k.outline(2, k.BLACK),
-        k.area(),
-        k.body({ isStatic: false }),
-        k.anchor("center"),
-        k.pos(16, 16),
-        "player",
-      ];
+      tilesDef["@"] = () => {
+        const comps = [
+          k.area(),
+          k.body({ isStatic: false }),
+          k.anchor("center"),
+          k.pos(16, 16),
+          "player",
+        ];
+
+        try {
+          comps.unshift(k.sprite("idle")); // Mặc định sprite idle
+        } catch {
+          console.warn("Player sprite not loaded");
+        }
+
+        return comps;
+      };
 
       // Custom component to display HP
       function enemyWithHp() {
@@ -290,223 +299,325 @@ export default function Play() {
         "danger",
       ];
 
-      Promise.all(loadPromises).then(() => {
-        if (isCleanedUp) return;
+      Promise.all(loadPromises)
+        .then(() => {
+          if (isCleanedUp) return;
 
-        const levelConfig = {
-          tileWidth: tileSize,
-          tileHeight: tileSize,
-          tiles: tilesDef,
-        };
+          const levelConfig = {
+            tileWidth: tileSize,
+            tileHeight: tileSize,
+            tiles: tilesDef,
+          };
 
-        k.scene("main", () => {
-          const levelMap = settings.layout.map((row) => row);
-          const level = k.addLevel(levelMap, levelConfig);
-          const players = level.get("player");
+          // Load player sprites với animation frames
+          try {
+            k.loadSpriteAtlas("/sprites/player/idle.png", {
+              idle: {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 160,
+                sliceX: 4,
+                anims: {
+                  idle: { from: 0, to: 3, speed: 5, loop: true },
+                },
+              },
+            });
 
-          if (players.length > 0) {
-            const player = players[0];
-            const SPEED = 150; // TOP-DOWN: Walking speed
+            k.loadSpriteAtlas("/sprites/player/run.png", {
+              run: {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 160,
+                sliceX: 4,
+                anims: {
+                  run: { from: 0, to: 3, speed: 8, loop: true },
+                },
+              },
+            });
 
-            // Player HP system
-            player.maxHp = 20;
-            player.hp = 20;
+            k.loadSpriteAtlas("/sprites/player/attack.png", {
+              attack: {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 160,
+                sliceX: 4,
+                anims: {
+                  attack: { from: 0, to: 3, speed: 10, loop: false },
+                },
+              },
+            });
 
-            k.camPos(player.pos);
+            k.loadSpriteAtlas("/sprites/player/death.png", {
+              death: {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 160,
+                sliceX: 4,
+                anims: {
+                  death: { from: 0, to: 3, speed: 6, loop: false },
+                },
+              },
+            });
+          } catch (err) {
+            console.warn("Player sprites not loaded:", err);
+          }
 
-            // Add HP UI Bar at top left
-            const hpBarBg = k.add([
-              k.rect(200, 30),
-              k.color(50, 50, 50),
-              k.pos(10, 10),
-              { fixed: true, z: 100 },
-            ]);
+          k.scene("main", () => {
+            const levelMap = settings.layout.map((row) => row);
+            const level = k.addLevel(levelMap, levelConfig);
+            const players = level.get("player");
 
-            const hpBar = k.add([
-              k.rect(196, 26),
-              k.color(34, 197, 94),
-              k.pos(12, 12),
-              { fixed: true, z: 101 },
-            ]);
+            if (players.length > 0) {
+              const player = players[0];
+              const SPEED = 150; // TOP-DOWN: Walking speed
 
-            const hpText = k.add([
-              k.text("HP: 20/20", { size: 16, weight: "bold" }),
-              k.color(0, 0, 0),
-              k.pos(20, 14),
-              { fixed: true, z: 102 },
-            ]);
+              // Player HP system
+              player.maxHp = 20;
+              player.hp = 20;
 
-            // Update HP display function
-            const updateHpDisplay = () => {
-              const hpPercent = Math.max(0, player.hp / player.maxHp);
-              const barWidth = 196 * hpPercent;
-              hpBar.width = barWidth;
+              k.camPos(player.pos);
 
-              // Change color based on HP
-              if (hpPercent > 0.5) {
-                hpBar.color = [34, 197, 94]; // Green
-              } else if (hpPercent > 0.25) {
-                hpBar.color = [234, 179, 8]; // Yellow
-              } else {
-                hpBar.color = [239, 68, 68]; // Red
+              // Play idle animation khi bắt đầu
+              try {
+                player.play("idle");
+              } catch {
+                console.warn("Could not play idle animation");
               }
 
-              hpText.text = `HP: ${Math.max(0, Math.floor(player.hp))}/${
-                player.maxHp
-              }`;
-            };
+              // Add HP UI Bar at top left
+              k.add([
+                k.rect(200, 30),
+                k.color(50, 50, 50),
+                k.pos(10, 10),
+                { fixed: true, z: 100 },
+              ]);
 
-            // Update player each frame
-            player.onUpdate(() => {
-              k.camPos(player.pos);
-              updateHpDisplay();
-            });
+              const hpBar = k.add([
+                k.rect(196, 26),
+                k.color(34, 197, 94),
+                k.pos(12, 12),
+                { fixed: true, z: 101 },
+              ]);
 
-            // TOP-DOWN: 4-directional movement (no jump)
-            const keys = {
-              left: false,
-              right: false,
-              up: false,
-              down: false,
-            };
+              const hpText = k.add([
+                k.text("HP: 20/20", { size: 16, weight: "bold" }),
+                k.color(0, 0, 0),
+                k.pos(20, 14),
+                { fixed: true, z: 102 },
+              ]);
 
-            let lastAttackTime = 0;
-            const attackCooldown = 500; // ms between attacks
+              // Update HP display function
+              const updateHpDisplay = () => {
+                const hpPercent = Math.max(0, player.hp / player.maxHp);
+                const barWidth = 196 * hpPercent;
+                hpBar.width = barWidth;
 
-            k.onKeyDown("left", () => {
-              keys.left = true;
-            });
-            k.onKeyRelease("left", () => {
-              keys.left = false;
-            });
+                // Change color based on HP
+                if (hpPercent > 0.5) {
+                  hpBar.color = [34, 197, 94]; // Green
+                } else if (hpPercent > 0.25) {
+                  hpBar.color = [234, 179, 8]; // Yellow
+                } else {
+                  hpBar.color = [239, 68, 68]; // Red
+                }
 
-            k.onKeyDown("right", () => {
-              keys.right = true;
-            });
-            k.onKeyRelease("right", () => {
-              keys.right = false;
-            });
+                hpText.text = `HP: ${Math.max(0, Math.floor(player.hp))}/${
+                  player.maxHp
+                }`;
+              };
 
-            k.onKeyDown("up", () => {
-              keys.up = true;
-            });
-            k.onKeyRelease("up", () => {
-              keys.up = false;
-            });
+              // Update player each frame
+              player.onUpdate(() => {
+                k.camPos(player.pos);
+                updateHpDisplay();
+              });
 
-            k.onKeyDown("down", () => {
-              keys.down = true;
-            });
-            k.onKeyRelease("down", () => {
-              keys.down = false;
-            });
+              // TOP-DOWN: 4-directional movement (no jump)
+              const keys = {
+                left: false,
+                right: false,
+                up: false,
+                down: false,
+              };
 
-            // Attack with spacebar
-            k.onKeyDown("space", () => {
-              const now = Date.now();
-              if (now - lastAttackTime < attackCooldown) return;
+              let lastAttackTime = 0;
+              const attackCooldown = 500; // ms between attacks
 
-              lastAttackTime = now;
+              k.onKeyDown("left", () => {
+                keys.left = true;
+              });
+              k.onKeyRelease("left", () => {
+                keys.left = false;
+              });
 
-              // Get all enemies from level
-              const enemies = level.get("enemy");
-              const attackRange = 50;
-              let hitCount = 0;
+              k.onKeyDown("right", () => {
+                keys.right = true;
+              });
+              k.onKeyRelease("right", () => {
+                keys.right = false;
+              });
 
-              console.log("Attack! Enemies found:", enemies.length);
+              k.onKeyDown("up", () => {
+                keys.up = true;
+              });
+              k.onKeyRelease("up", () => {
+                keys.up = false;
+              });
 
-              // Damage enemies near player
-              enemies.forEach((enemy) => {
-                const dist = player.pos.dist(enemy.pos);
-                console.log("Enemy HP:", enemy.hp, "Distance:", dist);
+              k.onKeyDown("down", () => {
+                keys.down = true;
+              });
+              k.onKeyRelease("down", () => {
+                keys.down = false;
+              });
 
-                if (dist < attackRange) {
-                  console.log("In range! Dealing damage");
-                  if (enemy.hp !== undefined && enemy.hp > 0) {
-                    enemy.hp -= 1;
-                    hitCount++;
-                    k.shake(3);
+              // Attack with spacebar
+              k.onKeyDown("space", () => {
+                const now = Date.now();
+                if (now - lastAttackTime < attackCooldown) return;
 
-                    // Show "-1" damage text
-                    k.add([
-                      k.text("-1", { size: 14, weight: "bold" }),
-                      k.color(255, 100, 100),
-                      k.pos(enemy.pos),
-                      k.lifespan(0.5),
-                      {
-                        speed: 100,
-                      },
-                      k.move(k.vec2(0, -1), 100),
-                    ]);
+                lastAttackTime = now;
 
-                    // Enemy dies when hp reaches 0
-                    if (enemy.hp <= 0) {
-                      k.addKaboom(enemy.pos);
-                      k.destroy(enemy);
+                // Play attack animation
+                try {
+                  player.play("attack");
+                  // Quay về idle sau attack animation
+                  setTimeout(() => {
+                    try {
+                      player.play("idle");
+                    } catch {}
+                  }, 400); // 400ms for attack animation
+                } catch {}
+
+                // Get all enemies from level
+                const enemies = level.get("enemy");
+                const attackRange = 50;
+                let hitCount = 0;
+
+                console.log("Attack! Enemies found:", enemies.length);
+
+                // Damage enemies near player
+                enemies.forEach((enemy) => {
+                  const dist = player.pos.dist(enemy.pos);
+                  console.log("Enemy HP:", enemy.hp, "Distance:", dist);
+
+                  if (dist < attackRange) {
+                    console.log("In range! Dealing damage");
+                    if (enemy.hp !== undefined && enemy.hp > 0) {
+                      enemy.hp -= 1;
+                      hitCount++;
+                      k.shake(3);
+
+                      // Show "-1" damage text
+                      k.add([
+                        k.text("-1", { size: 14, weight: "bold" }),
+                        k.color(255, 100, 100),
+                        k.pos(enemy.pos),
+                        k.lifespan(0.5),
+                        {
+                          speed: 100,
+                        },
+                        k.move(k.vec2(0, -1), 100),
+                      ]);
+
+                      // Enemy dies when hp reaches 0
+                      if (enemy.hp <= 0) {
+                        k.addKaboom(enemy.pos);
+                        k.destroy(enemy);
+                      }
                     }
+                  }
+                });
+
+                console.log("Hit count:", hitCount);
+
+                // Show attack feedback
+                if (hitCount > 0) {
+                  k.shake(5);
+                }
+              });
+
+              // Apply movement every frame
+              player.onUpdate(() => {
+                let vx = 0;
+                let vy = 0;
+                if (keys.left) vx = -SPEED;
+                if (keys.right) vx = SPEED;
+                if (keys.up) vy = -SPEED;
+                if (keys.down) vy = SPEED;
+
+                // Move player based on keys - use direct position update for top-down
+                if (vx !== 0 || vy !== 0) {
+                  player.pos.x += vx * k.dt();
+                  player.pos.y += vy * k.dt();
+                  // Play run animation khi moving
+                  try {
+                    // Chỉ play nếu không đang chạy run animation
+                    if (!player.curAnim || player.curAnim() !== "run") {
+                      player.play("run");
+                    }
+                  } catch {
+                    // Sprite chưa load
+                  }
+                } else {
+                  // Play idle animation khi không moving
+                  try {
+                    // Chỉ play nếu không đang chạy idle animation
+                    if (!player.curAnim || player.curAnim() !== "idle") {
+                      player.play("idle");
+                    }
+                  } catch {
+                    // Sprite chưa load
                   }
                 }
               });
 
-              console.log("Hit count:", hitCount);
+              player.onCollide("coin", (c) => {
+                k.destroy(c);
+                k.shake(2);
+              });
 
-              // Show attack feedback
-              if (hitCount > 0) {
-                k.shake(5);
-              }
-            });
+              // Handle trap and enemy collision - damage player
+              let lastDamageTime = 0;
+              const damageCooldown = 500; // ms between damage hits
 
-            // Apply movement every frame
-            player.onUpdate(() => {
-              let vx = 0;
-              let vy = 0;
-              if (keys.left) vx = -SPEED;
-              if (keys.right) vx = SPEED;
-              if (keys.up) vy = -SPEED;
-              if (keys.down) vy = SPEED;
+              player.onCollide("danger", () => {
+                const now = Date.now();
+                if (now - lastDamageTime < damageCooldown) return;
 
-              // Move player based on keys - use direct position update for top-down
-              if (vx !== 0 || vy !== 0) {
-                player.pos.x += vx * k.dt();
-                player.pos.y += vy * k.dt();
-              }
-            });
+                lastDamageTime = now;
+                player.hp -= 2; // Lose 2 HP per hit
+                k.shake(10);
 
-            player.onCollide("coin", (c) => {
-              k.destroy(c);
-              k.shake(2);
-            });
+                if (player.hp <= 0) {
+                  player.hp = 0;
+                  k.shake(30);
+                  // Play death animation
+                  try {
+                    player.play("death");
+                  } catch {}
+                  k.addKaboom(player.pos);
+                }
+              });
+            }
 
-            // Handle trap and enemy collision - damage player
-            let lastDamageTime = 0;
-            const damageCooldown = 500; // ms between damage hits
+            // nếu đang focused thì focus canvas ngay sau khi scene ready
+            if (isGameFocusedRef.current) {
+              requestAnimationFrame(() => focusGameCanvas());
+            }
+          });
 
-            player.onCollide("danger", () => {
-              const now = Date.now();
-              if (now - lastDamageTime < damageCooldown) return;
-
-              lastDamageTime = now;
-              player.hp -= 2; // Lose 2 HP per hit
-              k.shake(10);
-
-              if (player.hp <= 0) {
-                player.hp = 0;
-                k.shake(30);
-                k.addKaboom(player.pos);
-              }
-            });
-          }
+          k.go("main");
+        })
+        .catch((err) => {
+          console.error("Error loading sprites:", err);
         });
-
-        k.go("main");
-
-        // nếu đang focused thì focus canvas ngay sau khi scene ready
-        if (isGameFocusedRef.current) {
-          requestAnimationFrame(() => focusGameCanvas());
-        }
-      });
     } catch (err) {
-      console.error(err);
+      console.error("Failed to initialize game:", err);
     }
 
     return () => {
@@ -515,18 +626,17 @@ export default function Play() {
     };
   }, [gameData, focusGameCanvas]);
 
-  // Click outside: blur game
-  useEffect(() => {
-    const handlePointerDownOutside = (event) => {
-      if (
-        gameWrapperRef.current &&
-        !gameWrapperRef.current.contains(event.target)
-      ) {
-        setIsGameFocused(false);
-        isGameFocusedRef.current = false;
-      }
-    };
+  const handlePointerDownOutside = (event) => {
+    if (
+      gameWrapperRef.current &&
+      !gameWrapperRef.current.contains(event.target)
+    ) {
+      setIsGameFocused(false);
+      isGameFocusedRef.current = false;
+    }
+  };
 
+  useEffect(() => {
     document.addEventListener("pointerdown", handlePointerDownOutside, true);
     return () => {
       document.removeEventListener(

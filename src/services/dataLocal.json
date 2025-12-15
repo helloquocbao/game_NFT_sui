@@ -7,7 +7,7 @@
   },
   "config": {
     "width": 30,
-    "height": 20,
+    "height": 12,
     "tileSize": 32
   },
   "assets": {},

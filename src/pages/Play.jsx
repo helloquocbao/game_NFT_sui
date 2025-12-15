@@ -164,7 +164,8 @@ export default function Play() {
         global: false,
         background: [255, 247, 237],
       });
-
+      k.debug.inspect = true;
+      k.debug.showArea = true;
       kaboomInstanceRef.current = k;
       // TOP-DOWN MODE: Không có gravity
       k.setGravity(0);
@@ -216,7 +217,6 @@ export default function Play() {
             const colorHex = asset.type === "color" ? asset.value : "#94a3b8";
             comps.push(k.rect(tileSize, tileSize));
             comps.push(k.color(k.Color.fromHex(colorHex)));
-            comps.push(k.outline(2, k.BLACK));
           }
           return comps;
         };
@@ -225,7 +225,7 @@ export default function Play() {
       tilesDef["$"] = () => [
         k.circle(10),
         k.color(234, 179, 8),
-        k.outline(2, k.BLACK),
+
         k.area(),
         k.pos(16, 16),
         "coin",
@@ -233,10 +233,28 @@ export default function Play() {
 
       tilesDef["@"] = () => {
         const comps = [
-          k.area(),
-          k.body({ isStatic: false }),
-          k.anchor("center"),
+          // 1️⃣ GỐC CHUNG
           k.pos(16, 16),
+          k.anchor("center"),
+
+          // 2️⃣ CHỈ 1 SPRITE DUY NHẤT
+          k.sprite("idle", {
+            width: 32,
+            height: 32,
+          }),
+
+          // 3️⃣ HITBOX CHUẨN RPG (CHỈ PHẦN THÂN + CHÂN)
+          k.area({
+            shape: new k.Rect(
+              k.vec2(0, 8), // đẩy lên nhẹ
+              25, // thân người
+              20 // thân + chân
+            ),
+          }),
+
+          // 4️⃣ VẬT LÝ
+          k.body(),
+
           "player",
         ];
 
@@ -278,7 +296,7 @@ export default function Play() {
       tilesDef["E"] = () => [
         k.rect(24, 24),
         k.color(168, 85, 247),
-        k.outline(2, k.BLACK),
+
         k.area(),
         k.body(),
         k.anchor("center"),
@@ -292,7 +310,7 @@ export default function Play() {
       tilesDef["^"] = () => [
         k.polygon([k.vec2(0, 32), k.vec2(16, 0), k.vec2(32, 32)]),
         k.color(239, 68, 68),
-        k.outline(2, k.BLACK),
+
         k.area(),
         k.body({ isStatic: true }),
         "trap",
@@ -316,8 +334,9 @@ export default function Play() {
                 x: 0,
                 y: 0,
                 width: 160,
-                height: 160,
+                height: 40,
                 sliceX: 4,
+                sliceY: 1,
                 anims: {
                   idle: { from: 0, to: 3, speed: 5, loop: true },
                 },
@@ -329,8 +348,9 @@ export default function Play() {
                 x: 0,
                 y: 0,
                 width: 160,
-                height: 160,
+                height: 40,
                 sliceX: 4,
+                sliceY: 1,
                 anims: {
                   run: { from: 0, to: 3, speed: 8, loop: true },
                 },
@@ -342,8 +362,9 @@ export default function Play() {
                 x: 0,
                 y: 0,
                 width: 160,
-                height: 160,
+                height: 40,
                 sliceX: 4,
+                sliceY: 1,
                 anims: {
                   attack: { from: 0, to: 3, speed: 10, loop: false },
                 },
@@ -355,8 +376,9 @@ export default function Play() {
                 x: 0,
                 y: 0,
                 width: 160,
-                height: 160,
+                height: 40,
                 sliceX: 4,
+                sliceY: 1,
                 anims: {
                   death: { from: 0, to: 3, speed: 6, loop: false },
                 },

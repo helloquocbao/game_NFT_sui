@@ -159,7 +159,7 @@ export default function Play() {
       k = kaboom({
         width,
         height,
-        scale: 1.5,
+        scale: 1.4,
         root: gameContainerRef.current,
         global: false,
         background: [255, 247, 237],
@@ -169,22 +169,6 @@ export default function Play() {
       kaboomInstanceRef.current = k;
       // TOP-DOWN MODE: Không có gravity
       k.setGravity(0);
-
-      function patrol(speed = 60, dir = 1) {
-        return {
-          id: "patrol",
-          require: ["pos", "area"],
-          add() {
-            this.on("collide", (obj, col) => {
-              if (col.isLeft() || col.isRight()) dir = -dir;
-            });
-          },
-          update() {
-            // TOP-DOWN: Move horizontally (X-axis only for patrol)
-            this.move(speed * dir, 0);
-          },
-        };
-      }
 
       const validSprites = new Set();
       const loadPromises = [];
@@ -234,8 +218,8 @@ export default function Play() {
       tilesDef["@"] = () => {
         const comps = [
           // 1️⃣ GỐC CHUNG
-          k.pos(16, 16),
-          k.anchor("center"),
+          k.pos(32, 32),
+          k.anchor(k.vec2(0.2, 0.5)),
 
           // 2️⃣ CHỈ 1 SPRITE DUY NHẤT
           k.sprite("idle", {
@@ -262,6 +246,30 @@ export default function Play() {
       };
 
       // Custom component to display HP
+      function enemyWithHp() {
+        let hpText = null;
+        return {
+          id: "enemyHpDisplay",
+          require: ["pos"],
+          add() {
+            this.hp = 5;
+            hpText = k.add([
+              k.text(`HP: ${this.hp}`, { size: 14, weight: "bold" }),
+              k.color(0, 0, 0),
+              k.pos(this.pos.x, this.pos.y - 20),
+            ]);
+          },
+          update() {
+            if (hpText) {
+              hpText.text = `HP: ${this.hp}`;
+              hpText.pos = this.pos.add(0, -20);
+            }
+          },
+          destroy() {
+            if (hpText) k.destroy(hpText);
+          },
+        };
+      }
 
       tilesDef["E"] = () => [
         k.rect(24, 24),
@@ -271,6 +279,7 @@ export default function Play() {
         k.body(),
         k.anchor("center"),
         k.pos(16, 16),
+        enemyWithHp(),
         // patrol(),
         "enemy",
         "danger",
@@ -373,8 +382,8 @@ export default function Play() {
               const SPEED = 150; // TOP-DOWN: Walking speed
 
               // Player HP system
-              player.maxHp = 20;
-              player.hp = 20;
+              player.maxHp = 2;
+              player.hp = 2;
 
               k.camPos(player.pos);
 
@@ -392,6 +401,31 @@ export default function Play() {
                 k.color(34, 197, 94),
                 k.pos(12, 12),
                 { fixed: true, z: 101 },
+              ]);
+
+              // Vẽ vòng tròn tầm đánh của player
+              // Tạo polygon nhiều cạnh để xấp xỉ hình tròn (16 cạnh)
+              const circlePoints = [];
+              const radius = 25;
+              const sides = 16;
+              for (let i = 0; i < sides; i++) {
+                const angle = (i / sides) * Math.PI * 2;
+                circlePoints.push(
+                  k.vec2(Math.cos(angle) * radius, Math.sin(angle) * radius)
+                );
+              }
+
+              const attackRangeCircle = k.add([
+                k.pos(player.pos),
+                k.circle(20), // Vẽ hình tròn
+                k.area({ shape: new k.Polygon(circlePoints) }), // Hitbox polygon xấp xỉ hình tròn
+                k.opacity(0),
+                k.z(999),
+                {
+                  update() {
+                    this.pos = player.pos;
+                  },
+                },
               ]);
 
               // Update HP display function
@@ -468,39 +502,50 @@ export default function Play() {
                 lastAttackTime = now;
                 isAttacking = true;
 
+                // Hiển thị vòng tròn tầm đánh
+                attackRangeCircle.opacity = 0.5;
+
                 // Play attack animation
                 try {
+                  const currentFlip = player.flipX;
                   player.use(k.sprite("attack"));
+                  player.flipX = currentFlip; // Giữ nguyên hướng
                   player.play("attack");
                   // Quay về idle sau attack animation
                   setTimeout(() => {
                     try {
                       player.use(k.sprite("idle"));
+                      player.flipX = currentFlip; // Giữ nguyên hướng
                       player.play("idle");
                       isAttacking = false;
+                      // Ẩn vòng tròn tầm đánh
+                      attackRangeCircle.opacity = 0;
                     } catch {
                       player.play("idle");
                       isAttacking = false;
+                      attackRangeCircle.opacity = 0;
                     }
                   }, 600); // 600ms cho attack animation (6 frames * 100ms)
                 } catch {
                   isAttacking = false;
+                  attackRangeCircle.opacity = 0;
                 }
 
                 // Get all enemies from level
                 const enemies = level.get("enemy");
-                const attackRange = 107;
                 let hitCount = 0;
 
                 console.log("Attack! Enemies found:", enemies.length);
 
-                // Damage enemies near player
+                // Damage enemies that overlap with attack range circle
                 enemies.forEach((enemy) => {
-                  const dist = player.pos.dist(enemy.pos);
-                  console.log("Enemy HP:", enemy.hp, "Distance:", dist);
+                  // Check if enemy hitbox overlaps with attack circle
+                  const isColliding = attackRangeCircle.isColliding(enemy);
 
-                  if (dist < attackRange) {
-                    console.log("In range! Dealing damage");
+                  console.log("Enemy HP:", enemy.hp, "Colliding:", isColliding);
+
+                  if (isColliding) {
+                    console.log("Hit! Dealing damage");
                     if (enemy.hp !== undefined && enemy.hp > 0) {
                       enemy.hp -= 1;
                       hitCount++;
@@ -537,6 +582,8 @@ export default function Play() {
 
               // Apply movement every frame
               let isMoving = false;
+              let playerDirection = false; // false = right, true = left
+
               player.onUpdate(() => {
                 let vx = 0;
                 let vy = 0;
@@ -548,10 +595,12 @@ export default function Play() {
                 const wasMoving = isMoving;
                 isMoving = vx !== 0 || vy !== 0;
 
-                // Lật player khi di chuyển trái/phải
+                // Lưu hướng player khi di chuyển trái/phải
                 if (keys.left) {
+                  playerDirection = true;
                   player.flipX = true;
                 } else if (keys.right) {
+                  playerDirection = false;
                   player.flipX = false;
                 }
 
@@ -564,6 +613,7 @@ export default function Play() {
                   if (!wasMoving) {
                     try {
                       player.use(k.sprite("run"));
+                      player.flipX = playerDirection; // Khôi phục hướng
                       player.play("run");
                       console.log("Playing run animation");
                     } catch (e) {
@@ -574,6 +624,7 @@ export default function Play() {
                   // Play idle animation khi dừng lại
                   try {
                     player.use(k.sprite("idle"));
+                    player.flipX = playerDirection; // Khôi phục hướng
                     player.play("idle");
                     console.log("Playing idle animation");
                   } catch (e) {
@@ -596,7 +647,7 @@ export default function Play() {
                 if (now - lastDamageTime < damageCooldown) return;
 
                 lastDamageTime = now;
-                player.hp -= 2; // Lose 2 HP per hit
+                player.hp -= 1; // Lose 1 HP per hit
                 k.shake(10);
 
                 if (player.hp <= 0) {
@@ -604,9 +655,15 @@ export default function Play() {
                   k.shake(30);
                   // Play death animation
                   try {
+                    player.use(k.sprite("death"));
                     player.play("death");
                   } catch {}
                   k.addKaboom(player.pos);
+
+                  // Game Over after 1 second
+                  setTimeout(() => {
+                    k.go("main"); // Restart game
+                  }, 1000);
                 }
               });
             }

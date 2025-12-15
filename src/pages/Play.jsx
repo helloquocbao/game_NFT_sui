@@ -2,24 +2,18 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import kaboom from "kaboom";
 import { ArrowLeft, Edit3, Trophy, RotateCcw } from "lucide-react";
-import { useCurrentAccount } from "@mysten/dapp-kit";
-import {
-  fetchDungeonById,
-  readDungeonMap,
-  validateMapJsonSchema,
-} from "../services/dungeonService";
-import { PACKAGE_ID } from "../config/sui";
+import { fetchDungeonById } from "../services/dungeonService";
+
+import dataLocal from "../services/dataLocal.json";
 
 export default function Play() {
   const { id } = useParams();
-  const account = useCurrentAccount();
   const gameContainerRef = useRef(null);
   const [gameData, setGameData] = useState(null);
   const [scale, setScale] = useState(1);
   const [loadingMap, setLoadingMap] = useState(false);
   const [mapError, setMapError] = useState(null);
   const [showWinModal, setShowWinModal] = useState(false);
-  const [winScore, setWinScore] = useState({ collected: 0, total: 0 });
 
   // mặc định false, nhưng sẽ auto-activate 1 lần sau khi load xong
   const [isGameFocused, setIsGameFocused] = useState(false);
@@ -62,36 +56,42 @@ export default function Play() {
     const load = async () => {
       try {
         let game = null;
-        if (PACKAGE_ID) {
-          const onchain = await fetchDungeonById(id);
-          if (onchain) {
-            game = onchain;
+        const onchain = await fetchDungeonById(id);
 
-            if (active) setGameData(game);
-
-            setLoadingMap(true);
-            setMapError(null);
-            try {
-              const idToUse = onchain.patchMapId || onchain.blobId;
-              if (!idToUse) throw new Error("No patchMapId or blobId");
-              const mapJson = await readDungeonMap(idToUse);
-              if (!validateMapJsonSchema(mapJson))
-                throw new Error("Invalid Map");
-
-              if (active) {
-                setGameData({ ...game, settings: mapJson });
-              }
-            } catch (mapErr) {
-              console.error("Error loading map:", mapErr);
-              if (active) setMapError(mapErr.message);
-            } finally {
-              if (active) setLoadingMap(false);
-            }
-          } else {
-            if (active) setGameData(null);
-          }
+        if (onchain) {
+          game = onchain;
         } else {
-          if (active) setGameData(null);
+          // Fallback: use dataLocal as default game
+          game = {
+            id: id || "demo-1",
+            name: "Local Game",
+            creator: "local",
+            settings: dataLocal,
+          };
+        }
+
+        if (active) setGameData(game);
+
+        setLoadingMap(true);
+        setMapError(null);
+        try {
+          const mapJson = dataLocal;
+          // Validate map exists and has structure
+          if (!mapJson || !mapJson.layout || !mapJson.config) {
+            throw new Error("Invalid Map: Missing layout or config");
+          }
+          if (!Array.isArray(mapJson.layout) || mapJson.layout.length === 0) {
+            throw new Error("Invalid Map: Empty layout");
+          }
+
+          if (active) {
+            setGameData({ ...game, settings: mapJson });
+          }
+        } catch (mapErr) {
+          console.error("Error loading map:", mapErr);
+          if (active) setMapError(mapErr.message);
+        } finally {
+          if (active) setLoadingMap(false);
         }
       } catch (err) {
         console.error(err);
@@ -112,7 +112,7 @@ export default function Play() {
     return () => {
       active = false;
     };
-  }, [id, account]);
+  }, [id]);
 
   // AUTO PLAY: khi map sẵn sàng lần đầu -> tự focus để chơi liền
   useEffect(() => {
@@ -164,7 +164,8 @@ export default function Play() {
       });
 
       kaboomInstanceRef.current = k;
-      k.setGravity(1600);
+      // TOP-DOWN MODE: Không có gravity
+      k.setGravity(0);
 
       function patrol(speed = 60, dir = 1) {
         return {
@@ -176,6 +177,7 @@ export default function Play() {
             });
           },
           update() {
+            // TOP-DOWN: Move horizontally (X-axis only for patrol)
             this.move(speed * dir, 0);
           },
         };
@@ -232,11 +234,37 @@ export default function Play() {
         k.color(59, 130, 246),
         k.outline(2, k.BLACK),
         k.area(),
-        k.body(),
+        k.body({ isStatic: false }),
         k.anchor("center"),
         k.pos(16, 16),
         "player",
       ];
+
+      // Custom component to display HP
+      function enemyWithHp() {
+        let hpText = null;
+        return {
+          id: "enemyHpDisplay",
+          require: ["pos"],
+          add() {
+            this.hp = 5;
+            hpText = k.add([
+              k.text(`HP: ${this.hp}`, { size: 14, weight: "bold" }),
+              k.color(0, 0, 0),
+              k.pos(this.pos.x, this.pos.y - 20),
+            ]);
+          },
+          update() {
+            if (hpText) {
+              hpText.text = `HP: ${this.hp}`;
+              hpText.pos = this.pos.add(0, -20);
+            }
+          },
+          destroy() {
+            if (hpText) k.destroy(hpText);
+          },
+        };
+      }
 
       tilesDef["E"] = () => [
         k.rect(24, 24),
@@ -247,6 +275,7 @@ export default function Play() {
         k.anchor("center"),
         k.pos(16, 16),
         patrol(),
+        enemyWithHp(),
         "enemy",
         "danger",
       ];
@@ -275,68 +304,196 @@ export default function Play() {
           const level = k.addLevel(levelMap, levelConfig);
           const players = level.get("player");
 
-          const totalCoins = settings.layout
-            .join("")
-            .split("")
-            .filter((c) => c === "$").length;
-          let collectedCoins = 0;
-          let isWon = false;
-
           if (players.length > 0) {
             const player = players[0];
-            const SPEED = 200;
-            const JUMP_FORCE = 600;
+            const SPEED = 150; // TOP-DOWN: Walking speed
+
+            // Player HP system
+            player.maxHp = 20;
+            player.hp = 20;
 
             k.camPos(player.pos);
 
-            player.onUpdate(() => {
-              if (isWon) return;
-              k.camPos(player.pos);
-              if (player.pos.y > settings.config.height * tileSize + 200) {
-                k.shake(20);
-                k.go("main");
+            // Add HP UI Bar at top left
+            const hpBarBg = k.add([
+              k.rect(200, 30),
+              k.color(50, 50, 50),
+              k.pos(10, 10),
+              { fixed: true, z: 100 },
+            ]);
+
+            const hpBar = k.add([
+              k.rect(196, 26),
+              k.color(34, 197, 94),
+              k.pos(12, 12),
+              { fixed: true, z: 101 },
+            ]);
+
+            const hpText = k.add([
+              k.text("HP: 20/20", { size: 16, weight: "bold" }),
+              k.color(0, 0, 0),
+              k.pos(20, 14),
+              { fixed: true, z: 102 },
+            ]);
+
+            // Update HP display function
+            const updateHpDisplay = () => {
+              const hpPercent = Math.max(0, player.hp / player.maxHp);
+              const barWidth = 196 * hpPercent;
+              hpBar.width = barWidth;
+
+              // Change color based on HP
+              if (hpPercent > 0.5) {
+                hpBar.color = [34, 197, 94]; // Green
+              } else if (hpPercent > 0.25) {
+                hpBar.color = [234, 179, 8]; // Yellow
+              } else {
+                hpBar.color = [239, 68, 68]; // Red
               }
-            });
 
-            k.onKeyDown("left", () => {
-              if (!isWon && isGameFocusedRef.current) player.move(-SPEED, 0);
-            });
-            k.onKeyDown("right", () => {
-              if (!isWon && isGameFocusedRef.current) player.move(SPEED, 0);
-            });
-
-            const jump = () => {
-              if (!isWon && isGameFocusedRef.current && player.isGrounded())
-                player.jump(JUMP_FORCE);
+              hpText.text = `HP: ${Math.max(0, Math.floor(player.hp))}/${
+                player.maxHp
+              }`;
             };
 
-            k.onKeyPress("up", jump);
-            k.onKeyPress("space", jump);
+            // Update player each frame
+            player.onUpdate(() => {
+              k.camPos(player.pos);
+              updateHpDisplay();
+            });
 
-            player.onCollide("coin", (c) => {
-              if (isWon) return;
-              k.destroy(c);
-              k.shake(2);
-              collectedCoins++;
+            // TOP-DOWN: 4-directional movement (no jump)
+            const keys = {
+              left: false,
+              right: false,
+              up: false,
+              down: false,
+            };
 
-              if (collectedCoins >= totalCoins) {
-                isWon = true;
-                k.shake(10);
-                k.addKaboom(player.pos);
+            let lastAttackTime = 0;
+            const attackCooldown = 500; // ms between attacks
 
-                setWinScore({ collected: collectedCoins, total: totalCoins });
-                setShowWinModal(true);
+            k.onKeyDown("left", () => {
+              keys.left = true;
+            });
+            k.onKeyRelease("left", () => {
+              keys.left = false;
+            });
 
-                setIsGameFocused(false);
-                isGameFocusedRef.current = false;
+            k.onKeyDown("right", () => {
+              keys.right = true;
+            });
+            k.onKeyRelease("right", () => {
+              keys.right = false;
+            });
+
+            k.onKeyDown("up", () => {
+              keys.up = true;
+            });
+            k.onKeyRelease("up", () => {
+              keys.up = false;
+            });
+
+            k.onKeyDown("down", () => {
+              keys.down = true;
+            });
+            k.onKeyRelease("down", () => {
+              keys.down = false;
+            });
+
+            // Attack with spacebar
+            k.onKeyDown("space", () => {
+              const now = Date.now();
+              if (now - lastAttackTime < attackCooldown) return;
+
+              lastAttackTime = now;
+
+              // Get all enemies from level
+              const enemies = level.get("enemy");
+              const attackRange = 50;
+              let hitCount = 0;
+
+              console.log("Attack! Enemies found:", enemies.length);
+
+              // Damage enemies near player
+              enemies.forEach((enemy) => {
+                const dist = player.pos.dist(enemy.pos);
+                console.log("Enemy HP:", enemy.hp, "Distance:", dist);
+
+                if (dist < attackRange) {
+                  console.log("In range! Dealing damage");
+                  if (enemy.hp !== undefined && enemy.hp > 0) {
+                    enemy.hp -= 1;
+                    hitCount++;
+                    k.shake(3);
+
+                    // Show "-1" damage text
+                    k.add([
+                      k.text("-1", { size: 14, weight: "bold" }),
+                      k.color(255, 100, 100),
+                      k.pos(enemy.pos),
+                      k.lifespan(0.5),
+                      {
+                        speed: 100,
+                      },
+                      k.move(k.vec2(0, -1), 100),
+                    ]);
+
+                    // Enemy dies when hp reaches 0
+                    if (enemy.hp <= 0) {
+                      k.addKaboom(enemy.pos);
+                      k.destroy(enemy);
+                    }
+                  }
+                }
+              });
+
+              console.log("Hit count:", hitCount);
+
+              // Show attack feedback
+              if (hitCount > 0) {
+                k.shake(5);
               }
             });
 
+            // Apply movement every frame
+            player.onUpdate(() => {
+              let vx = 0;
+              let vy = 0;
+              if (keys.left) vx = -SPEED;
+              if (keys.right) vx = SPEED;
+              if (keys.up) vy = -SPEED;
+              if (keys.down) vy = SPEED;
+
+              // Move player based on keys - use direct position update for top-down
+              if (vx !== 0 || vy !== 0) {
+                player.pos.x += vx * k.dt();
+                player.pos.y += vy * k.dt();
+              }
+            });
+
+            player.onCollide("coin", (c) => {
+              k.destroy(c);
+              k.shake(2);
+            });
+
+            // Handle trap and enemy collision - damage player
+            let lastDamageTime = 0;
+            const damageCooldown = 500; // ms between damage hits
+
             player.onCollide("danger", () => {
-              k.shake(20);
-              k.addKaboom(player.pos);
-              k.destroy(player);
-              k.wait(1, () => k.go("main"));
+              const now = Date.now();
+              if (now - lastDamageTime < damageCooldown) return;
+
+              lastDamageTime = now;
+              player.hp -= 2; // Lose 2 HP per hit
+              k.shake(10);
+
+              if (player.hp <= 0) {
+                player.hp = 0;
+                k.shake(30);
+                k.addKaboom(player.pos);
+              }
             });
           }
         });
@@ -463,7 +620,7 @@ export default function Play() {
           )}
 
           {mapError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-red-50 z-[60]">
+            <div className="absolute inset-0 flex items-center justify-center bg-red-50 z-60">
               <div className="text-center p-8 bg-white border-4 border-red-500 shadow-xl max-w-md">
                 <h2 className="text-2xl font-black text-red-600 mb-4">ERROR</h2>
                 <div className="text-slate-700 font-bold font-mono whitespace-pre-wrap">
@@ -519,11 +676,11 @@ export default function Play() {
       </div>
 
       <div className="mt-6 px-4 py-3 bg-white/80 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-sm font-mono text-slate-800 text-center max-w-3xl">
-        <div className="font-bold mb-2">Instructions</div>
+        <div className="font-bold mb-2">Controls</div>
         <div className="flex flex-wrap justify-center gap-4">
-          <span>← / → : Move</span>
-          <span>↑ or Space: Jump</span>
-          <span>$ Collect all coins to win</span>
+          <span>← / → : Move Left/Right</span>
+          <span>↑ / ↓ : Move Up/Down</span>
+          <span>Explore the world!</span>
         </div>
       </div>
 
@@ -536,30 +693,18 @@ export default function Play() {
         >
           <div className="bg-white border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(0,0,0,1)] p-8 max-w-md w-full mx-4 animate-in zoom-in-95 duration-300">
             <div className="flex flex-col items-center text-center">
-              <div className="mb-4 p-4 bg-yellow-100 rounded-full">
-                <Trophy size={64} className="text-yellow-500" strokeWidth={2} />
-              </div>
-
-              <h2 className="text-4xl font-black text-slate-900 mb-2">
-                YOU WIN!
+              <h2 className="text-2xl font-black text-slate-900 mb-2">
+                Game Mode Active
               </h2>
-
-              <div className="mb-6">
-                <p className="text-lg font-bold text-slate-600 mb-1">Score</p>
-                <p className="text-3xl font-black text-orange-500">
-                  {winScore.collected} / {winScore.total}
-                </p>
-                <p className="text-sm text-slate-500 mt-1">
-                  Treasures collected
-                </p>
-              </div>
+              <p className="text-slate-600 mb-6">
+                Use arrow keys to move around the world!
+              </p>
 
               <button
                 onClick={handleReplay}
-                className="w-full px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all flex items-center justify-center gap-2"
+                className="w-full px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all"
               >
-                <RotateCcw size={20} strokeWidth={3} />
-                Play Again
+                Close
               </button>
             </div>
           </div>

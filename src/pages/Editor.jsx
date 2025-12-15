@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import kaboom from "kaboom";
-import { useCurrentAccount, ConnectButton } from "@mysten/dapp-kit";
 
 import {
   Play,
@@ -24,9 +23,6 @@ import {
   RotateCcw,
   ArrowLeft,
 } from "lucide-react";
-import { WalletBar } from "../components/WalletBar";
-import { useWalrusUpload } from "../hooks/useWalrusUpload";
-import { useDungeonMint } from "../hooks/useDungeonMint";
 import {
   fetchDungeonById,
   readDungeonMap,
@@ -150,8 +146,6 @@ export default function Editor() {
   const gameWrapperRef = useRef(null);
 
   const editorGridRef = useRef(null);
-  const { uploadCombinedDungeon, isUploading } = useWalrusUpload();
-  const { mintDungeon, isMinting } = useDungeonMint();
 
   // Helper để kiểm tra element có thuộc "safe zone" (UI) không
   const shouldIgnoreBlur = useCallback((target) => {
@@ -209,7 +203,6 @@ export default function Editor() {
     return () => clearTimeout(timer);
   }, [mode, showWinModal, activateGame]);
 
-  const account = useCurrentAccount();
   const [unAuthorized, setUnAuthorized] = useState(false);
 
   // Nạp dữ liệu map on-chain theo id
@@ -231,13 +224,9 @@ export default function Editor() {
         if (!dungeon) return;
 
         console.log("Dungeon Owner:", dungeon.owner);
-        console.log("Current Account:", account?.address);
 
         // Check ownership (Updated with case-insensitive check)
-        const isOwner =
-          account?.address &&
-          dungeon.owner &&
-          dungeon.owner.toLowerCase() === account.address.toLowerCase();
+        const isOwner = false;
 
         if (!isOwner) {
           console.warn("Ownership mismatch");
@@ -282,7 +271,7 @@ export default function Editor() {
     return () => {
       active = false;
     };
-  }, [id, account]);
+  }, [id]);
 
   const currentTool = TOOLS.find((t) => t.id === selectedToolId) || TOOLS[0];
 
@@ -531,12 +520,6 @@ export default function Editor() {
     };
   };
 
-  const handleExport = () => {
-    const exportData = buildMapPayload();
-    console.log("Exported map:", exportData);
-    showToast("Map data logged to console.", "success");
-  };
-
   const handleSaveAndMint = async () => {
     if (!validateMap()) return;
     try {
@@ -548,25 +531,13 @@ export default function Editor() {
       setMintStatus("Uploading to Walrus (Batch)...");
 
       // Combined upload
-      const { mapCtx, imageCtx } = await uploadCombinedDungeon(mapJson, thumbnail);
-      console.log("Upload Result:", { mapCtx, imageCtx });
-
-      const blobId = mapCtx.blobId;
-      const patchMapId = mapCtx.patchId;
-      const imagePatchId = imageCtx.patchId;
+      console.log("Uploading map and thumbnail...", mapJson, thumbnail);
 
       // Tạo image URL từ patchId
-      const imageUrl = `https://wal-aggregator-testnet.staketab.org/v1/blobs/by-quilt-patch-id/${imagePatchId}`;
 
       setMintStatus("Minting on Sui testnet...");
-      const digest = await mintDungeon({
-        name: mapJson.meta.title,
-        blobId,
-        patchMapId,
-        imageUrl,
-      });
 
-      setMintStatus(`Mint success: ${digest}`);
+      setMintStatus(`Mint success:`);
       showToast(`Mint success!`, "success");
     } catch (err) {
       console.error(err);
@@ -871,13 +842,21 @@ export default function Editor() {
     if (isGameFocused) requestAnimationFrame(() => focusGameCanvas());
   }, [isGameFocused, focusGameCanvas]);
 
-  const RetroButton = ({ onClick, onPointerDown, active, children, className, disabled }) => (
+  const RetroButton = ({
+    onClick,
+    onPointerDown,
+    active,
+    children,
+    className,
+    disabled,
+  }) => (
     <button
       onClick={onClick}
       onPointerDown={onPointerDown}
       disabled={disabled}
-      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${active ? "text-white" : "text-slate-900 hover:opacity-80"
-        } ${className}`}
+      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${
+        active ? "text-white" : "text-slate-900 hover:opacity-80"
+      } ${className}`}
     >
       {children}
     </button>
@@ -894,26 +873,16 @@ export default function Editor() {
 
   const currentTileSize = BASE_TILE_SIZE * zoom;
 
-  if (!account) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
-        <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
-          <h2 className="text-2xl font-black mb-4 text-orange-600 uppercase">Connect Wallet Required</h2>
-          <p className="mb-6 font-medium">Please connect your Sui wallet to access the Editor.</p>
-          <div className="flex justify-center wallet-connect-btn">
-            <ConnectButton />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (unAuthorized) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
         <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
-          <h2 className="text-2xl font-black mb-4 text-red-500">UNAUTHORIZED</h2>
-          <p className="mb-6 font-medium">You are not the owner of this NFT Dungeon content.</p>
+          <h2 className="text-2xl font-black mb-4 text-red-500">
+            UNAUTHORIZED
+          </h2>
+          <p className="mb-6 font-medium">
+            You are not the owner of this NFT Dungeon content.
+          </p>
           <RetroButton
             onClick={() => navigate("/")}
             className="w-full bg-slate-900 text-white hover:bg-slate-700"
@@ -927,9 +896,7 @@ export default function Editor() {
 
   return (
     <div className="flex h-screen bg-orange-50 text-slate-900 font-mono overflow-hidden">
-      <div className="fixed top-0 left-0 right-0 z-40">
-        <WalletBar />
-      </div>
+      <div className="fixed top-0 left-0 right-0 z-40"></div>
       <style>{`
 
         .hide-scrollbar::-webkit-scrollbar { display: none; }
@@ -940,7 +907,11 @@ export default function Editor() {
 
       {/* SIDEBAR */}
 
-      <div className={`w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto mt-14 transition-all duration-300 relative ${mode === "PLAY" ? "opacity-50 grayscale" : ""}`}>
+      <div
+        className={`w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto mt-14 transition-all duration-300 relative ${
+          mode === "PLAY" ? "opacity-50 grayscale" : ""
+        }`}
+      >
         {mode === "PLAY" && (
           <div className="absolute inset-0 z-50 bg-white/20 cursor-not-allowed" />
         )}
@@ -1038,15 +1009,17 @@ export default function Editor() {
               return (
                 <div
                   key={tool.id}
-                  className={`transition-all ${isSelected ? "translate-x-2" : ""
-                    }`}
+                  className={`transition-all ${
+                    isSelected ? "translate-x-2" : ""
+                  }`}
                 >
                   <button
                     onClick={() => setSelectedToolId(tool.id)}
-                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${isSelected
-                      ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
-                      : "bg-white text-slate-900"
-                      }`}
+                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${
+                      isSelected
+                        ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
+                        : "bg-white text-slate-900"
+                    }`}
                   >
                     <div
                       className="w-10 h-10 border-2 border-slate-900 flex items-center justify-center shrink-0 bg-white"
@@ -1059,8 +1032,9 @@ export default function Editor() {
                       {!isWall && tool.icon && (
                         <tool.icon
                           size={20}
-                          className={`relative z-10 ${isSelected ? "text-white" : "text-slate-900"
-                            }`}
+                          className={`relative z-10 ${
+                            isSelected ? "text-white" : "text-slate-900"
+                          }`}
                           strokeWidth={2.5}
                         />
                       )}
@@ -1098,7 +1072,10 @@ export default function Editor() {
       <div className="flex-1 relative flex flex-col overflow-hidden mt-14">
         {/* TOP BAR (Luôn hiển thị) */}
 
-        <div className="absolute top-6 left-6 right-6 z-50 flex justify-between items-center" data-ui="1">
+        <div
+          className="absolute top-6 left-6 right-6 z-50 flex justify-between items-center"
+          data-ui="1"
+        >
           <RetroButton
             onClick={() => navigate("/")}
             className="bg-slate-700 hover:bg-slate-600 text-white flex items-center gap-2"
@@ -1115,7 +1092,8 @@ export default function Editor() {
                   }}
                   className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
                 >
-                  <Play size={18} fill="currentColor" strokeWidth={3} /> PLAY TEST
+                  <Play size={18} fill="currentColor" strokeWidth={3} /> PLAY
+                  TEST
                 </RetroButton>
 
                 <div className="flex gap-2">
@@ -1127,10 +1105,9 @@ export default function Editor() {
                   </RetroButton> */}
                   <RetroButton
                     onClick={handleSaveAndMint}
-                    disabled={isUploading || isMinting}
                     className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
                   >
-                    {isUploading || isMinting ? "PROCESSING..." : "SAVE & MINT"}
+                    {"SAVE & MINT"}
                   </RetroButton>
                 </div>
               </>
@@ -1162,10 +1139,11 @@ export default function Editor() {
         {/* Toast Notification */}
         {toast && (
           <div
-            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${toast.type === "success"
-              ? "bg-green-500 text-white"
-              : "bg-red-500 text-white"
-              }`}
+            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${
+              toast.type === "success"
+                ? "bg-green-500 text-white"
+                : "bg-red-500 text-white"
+            }`}
           >
             {toast.message}
           </div>
@@ -1196,8 +1174,9 @@ export default function Editor() {
               <div className="flex items-center justify-center min-w-[2000px] min-h-[2000px] p-20">
                 <div
                   ref={editorGridRef}
-                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${isZoomMode ? "" : "cursor-crosshair"
-                    }`}
+                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${
+                    isZoomMode ? "" : "cursor-crosshair"
+                  }`}
                 >
                   <div
                     style={{
@@ -1289,10 +1268,11 @@ export default function Editor() {
               <div className="bg-white border-2 border-slate-900 p-1 flex gap-1 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]">
                 <button
                   onClick={() => setIsZoomMode(!isZoomMode)}
-                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${isZoomMode
-                    ? "bg-red-500 text-white"
-                    : "bg-slate-200 text-slate-700 hover:bg-white"
-                    }`}
+                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${
+                    isZoomMode
+                      ? "bg-red-500 text-white"
+                      : "bg-slate-200 text-slate-700 hover:bg-white"
+                  }`}
                 >
                   {isZoomMode ? (
                     <Hand size={16} strokeWidth={3} />

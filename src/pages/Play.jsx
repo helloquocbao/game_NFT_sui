@@ -313,7 +313,7 @@ export default function Play() {
                 sliceX: 4,
                 sliceY: 1,
                 anims: {
-                  idle: { from: 0, to: 3, speed: 5, loop: true },
+                  idle: { from: 0, to: 1, speed: 3, loop: true },
                 },
               },
             });
@@ -327,7 +327,7 @@ export default function Play() {
                 sliceX: 4,
                 sliceY: 1,
                 anims: {
-                  run: { from: 0, to: 3, speed: 8, loop: true },
+                  run: { from: 0, to: 3, speed: 12, loop: true },
                 },
               },
             });
@@ -522,6 +522,7 @@ export default function Play() {
               });
 
               // Apply movement every frame
+              let isMoving = false;
               player.onUpdate(() => {
                 let vx = 0;
                 let vy = 0;
@@ -530,28 +531,30 @@ export default function Play() {
                 if (keys.up) vy = -SPEED;
                 if (keys.down) vy = SPEED;
 
+                const wasMoving = isMoving;
+                isMoving = vx !== 0 || vy !== 0;
+
                 // Move player based on keys - use direct position update for top-down
-                if (vx !== 0 || vy !== 0) {
+                if (isMoving) {
                   player.pos.x += vx * k.dt();
                   player.pos.y += vy * k.dt();
+
                   // Play run animation khi moving
-                  try {
-                    // Chỉ play nếu không đang chạy run animation
-                    if (!player.curAnim || player.curAnim() !== "run") {
+                  if (!wasMoving) {
+                    try {
                       player.play("run");
+                      console.log("Playing run animation");
+                    } catch (e) {
+                      console.warn("Cannot play run animation:", e);
                     }
-                  } catch {
-                    // Sprite chưa load
                   }
-                } else {
-                  // Play idle animation khi không moving
+                } else if (wasMoving) {
+                  // Play idle animation khi dừng lại
                   try {
-                    // Chỉ play nếu không đang chạy idle animation
-                    if (!player.curAnim || player.curAnim() !== "idle") {
-                      player.play("idle");
-                    }
-                  } catch {
-                    // Sprite chưa load
+                    player.play("idle");
+                    console.log("Playing idle animation");
+                  } catch (e) {
+                    console.warn("Cannot play idle animation:", e);
                   }
                 }
               });

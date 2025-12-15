@@ -246,9 +246,9 @@ export default function Play() {
           // 3️⃣ HITBOX CHUẨN RPG (CHỈ PHẦN THÂN + CHÂN)
           k.area({
             shape: new k.Rect(
-              k.vec2(0, 8), // đẩy lên nhẹ
+              k.vec2(0, 7), // đẩy lên nhẹ
               25, // thân người
-              20 // thân + chân
+              25 // thân + chân
             ),
           }),
 
@@ -257,12 +257,6 @@ export default function Play() {
 
           "player",
         ];
-
-        try {
-          comps.unshift(k.sprite("idle")); // Mặc định sprite idle
-        } catch {
-          console.warn("Player sprite not loaded");
-        }
 
         return comps;
       };
@@ -277,7 +271,7 @@ export default function Play() {
         k.body(),
         k.anchor("center"),
         k.pos(16, 16),
-        patrol(),
+        // patrol(),
         "enemy",
         "danger",
       ];
@@ -292,7 +286,74 @@ export default function Play() {
         "danger",
       ];
 
-      Promise.all(loadPromises)
+      // Load player sprites TRƯỚC KHI tạo level - mỗi trạng thái một file
+      const playerSpritePromises = [];
+
+      playerSpritePromises.push(
+        k.loadSpriteAtlas("/sprites/player/Idle.png", {
+          idle: {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 40,
+            sliceX: 4,
+            sliceY: 1,
+            anims: {
+              idle: { from: 2, to: 3, speed: 4, loop: true },
+            },
+          },
+        })
+      );
+
+      playerSpritePromises.push(
+        k.loadSpriteAtlas("/sprites/player/Run.png", {
+          run: {
+            x: 0,
+            y: 0,
+            width: 250,
+            height: 40,
+            sliceX: 6,
+            sliceY: 1,
+            anims: {
+              run: { from: 0, to: 5, speed: 10, loop: true },
+            },
+          },
+        })
+      );
+
+      playerSpritePromises.push(
+        k.loadSpriteAtlas("/sprites/player/Attack.png", {
+          attack: {
+            x: 0,
+            y: 0,
+            width: 250,
+            height: 40,
+            sliceX: 6,
+            sliceY: 1,
+            anims: {
+              attack: { from: 0, to: 5, speed: 10, loop: true },
+            },
+          },
+        })
+      );
+
+      playerSpritePromises.push(
+        k.loadSpriteAtlas("/sprites/player/Death.png", {
+          death: {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 40,
+            sliceX: 4,
+            sliceY: 1,
+            anims: {
+              death: { from: 0, to: 3, speed: 6, loop: false },
+            },
+          },
+        })
+      );
+
+      Promise.all([...loadPromises, ...playerSpritePromises])
         .then(() => {
           if (isCleanedUp) return;
 
@@ -301,67 +362,6 @@ export default function Play() {
             tileHeight: tileSize,
             tiles: tilesDef,
           };
-
-          // Load player sprites với animation frames
-          try {
-            k.loadSpriteAtlas("/sprites/player/Idle.png", {
-              idle: {
-                x: 0,
-                y: 0,
-                width: 160,
-                height: 40,
-                sliceX: 4,
-                sliceY: 1,
-                anims: {
-                  idle: { from: 0, to: 1, speed: 3, loop: true },
-                },
-              },
-            });
-
-            k.loadSpriteAtlas("/sprites/player/Run.png", {
-              run: {
-                x: 0,
-                y: 0,
-                width: 160,
-                height: 40,
-                sliceX: 4,
-                sliceY: 1,
-                anims: {
-                  run: { from: 0, to: 3, speed: 12, loop: true },
-                },
-              },
-            });
-
-            k.loadSpriteAtlas("/sprites/player/Attack.png", {
-              attack: {
-                x: 0,
-                y: 0,
-                width: 160,
-                height: 40,
-                sliceX: 4,
-                sliceY: 1,
-                anims: {
-                  attack: { from: 0, to: 3, speed: 10, loop: false },
-                },
-              },
-            });
-
-            k.loadSpriteAtlas("/sprites/player/Death.png", {
-              death: {
-                x: 0,
-                y: 0,
-                width: 160,
-                height: 40,
-                sliceX: 4,
-                sliceY: 1,
-                anims: {
-                  death: { from: 0, to: 3, speed: 6, loop: false },
-                },
-              },
-            });
-          } catch (err) {
-            console.warn("Player sprites not loaded:", err);
-          }
 
           k.scene("main", () => {
             const levelMap = settings.layout.map((row) => row);
@@ -425,7 +425,7 @@ export default function Play() {
               };
 
               let lastAttackTime = 0;
-              const attackCooldown = 500; // ms between attacks
+              const attackCooldown = 600; // ms between attacks
 
               k.onKeyDown("left", () => {
                 keys.left = true;
@@ -456,26 +456,40 @@ export default function Play() {
               });
 
               // Attack with spacebar
+              let isAttacking = false;
               k.onKeyDown("space", () => {
                 const now = Date.now();
-                if (now - lastAttackTime < attackCooldown) return;
+
+                // Nếu đang cooldown hoặc đang attack thì không làm gì cả
+                if (now - lastAttackTime < attackCooldown || isAttacking) {
+                  return;
+                }
 
                 lastAttackTime = now;
+                isAttacking = true;
 
                 // Play attack animation
                 try {
+                  player.use(k.sprite("attack"));
                   player.play("attack");
                   // Quay về idle sau attack animation
                   setTimeout(() => {
                     try {
+                      player.use(k.sprite("idle"));
                       player.play("idle");
-                    } catch {}
-                  }, 400); // 400ms for attack animation
-                } catch {}
+                      isAttacking = false;
+                    } catch {
+                      player.play("idle");
+                      isAttacking = false;
+                    }
+                  }, 600); // 600ms cho attack animation (6 frames * 100ms)
+                } catch {
+                  isAttacking = false;
+                }
 
                 // Get all enemies from level
                 const enemies = level.get("enemy");
-                const attackRange = 50;
+                const attackRange = 107;
                 let hitCount = 0;
 
                 console.log("Attack! Enemies found:", enemies.length);
@@ -534,6 +548,13 @@ export default function Play() {
                 const wasMoving = isMoving;
                 isMoving = vx !== 0 || vy !== 0;
 
+                // Lật player khi di chuyển trái/phải
+                if (keys.left) {
+                  player.flipX = true;
+                } else if (keys.right) {
+                  player.flipX = false;
+                }
+
                 // Move player based on keys - use direct position update for top-down
                 if (isMoving) {
                   player.pos.x += vx * k.dt();
@@ -542,6 +563,7 @@ export default function Play() {
                   // Play run animation khi moving
                   if (!wasMoving) {
                     try {
+                      player.use(k.sprite("run"));
                       player.play("run");
                       console.log("Playing run animation");
                     } catch (e) {
@@ -551,6 +573,7 @@ export default function Play() {
                 } else if (wasMoving) {
                   // Play idle animation khi dừng lại
                   try {
+                    player.use(k.sprite("idle"));
                     player.play("idle");
                     console.log("Playing idle animation");
                   } catch (e) {

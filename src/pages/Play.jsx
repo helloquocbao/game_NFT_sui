@@ -159,7 +159,7 @@ export default function Play() {
       k = kaboom({
         width,
         height,
-        scale: 1,
+        scale: 1.5,
         root: gameContainerRef.current,
         global: false,
         background: [255, 247, 237],
@@ -268,30 +268,6 @@ export default function Play() {
       };
 
       // Custom component to display HP
-      function enemyWithHp() {
-        let hpText = null;
-        return {
-          id: "enemyHpDisplay",
-          require: ["pos"],
-          add() {
-            this.hp = 5;
-            hpText = k.add([
-              k.text(`HP: ${this.hp}`, { size: 14, weight: "bold" }),
-              k.color(0, 0, 0),
-              k.pos(this.pos.x, this.pos.y - 20),
-            ]);
-          },
-          update() {
-            if (hpText) {
-              hpText.text = `HP: ${this.hp}`;
-              hpText.pos = this.pos.add(0, -20);
-            }
-          },
-          destroy() {
-            if (hpText) k.destroy(hpText);
-          },
-        };
-      }
 
       tilesDef["E"] = () => [
         k.rect(24, 24),
@@ -302,7 +278,6 @@ export default function Play() {
         k.anchor("center"),
         k.pos(16, 16),
         patrol(),
-        enemyWithHp(),
         "enemy",
         "danger",
       ];
@@ -329,7 +304,7 @@ export default function Play() {
 
           // Load player sprites với animation frames
           try {
-            k.loadSpriteAtlas("/sprites/player/idle.png", {
+            k.loadSpriteAtlas("/sprites/player/Idle.png", {
               idle: {
                 x: 0,
                 y: 0,
@@ -343,7 +318,7 @@ export default function Play() {
               },
             });
 
-            k.loadSpriteAtlas("/sprites/player/run.png", {
+            k.loadSpriteAtlas("/sprites/player/Run.png", {
               run: {
                 x: 0,
                 y: 0,
@@ -357,7 +332,7 @@ export default function Play() {
               },
             });
 
-            k.loadSpriteAtlas("/sprites/player/attack.png", {
+            k.loadSpriteAtlas("/sprites/player/Attack.png", {
               attack: {
                 x: 0,
                 y: 0,
@@ -371,7 +346,7 @@ export default function Play() {
               },
             });
 
-            k.loadSpriteAtlas("/sprites/player/death.png", {
+            k.loadSpriteAtlas("/sprites/player/Death.png", {
               death: {
                 x: 0,
                 y: 0,
@@ -411,25 +386,12 @@ export default function Play() {
               }
 
               // Add HP UI Bar at top left
-              k.add([
-                k.rect(200, 30),
-                k.color(50, 50, 50),
-                k.pos(10, 10),
-                { fixed: true, z: 100 },
-              ]);
 
               const hpBar = k.add([
                 k.rect(196, 26),
                 k.color(34, 197, 94),
                 k.pos(12, 12),
                 { fixed: true, z: 101 },
-              ]);
-
-              const hpText = k.add([
-                k.text("HP: 20/20", { size: 16, weight: "bold" }),
-                k.color(0, 0, 0),
-                k.pos(20, 14),
-                { fixed: true, z: 102 },
               ]);
 
               // Update HP display function
@@ -446,10 +408,6 @@ export default function Play() {
                 } else {
                   hpBar.color = [239, 68, 68]; // Red
                 }
-
-                hpText.text = `HP: ${Math.max(0, Math.floor(player.hp))}/${
-                  player.maxHp
-                }`;
               };
 
               // Update player each frame

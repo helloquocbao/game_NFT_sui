@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+/* Custom wallet button styling */
+.wallet-connect-btn button {
+  background-color: #f97316 !important;
+  color: white !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  border: 3px solid #0f172a !important;
+  box-shadow: 4px 4px 0px 0px rgba(15, 23, 42, 1) !important;
+  padding: 0.5rem 1.25rem !important;
+  transition: all 0.2s !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  letter-spacing: 0.05em !important;
+}
+
+.wallet-connect-btn button:hover {
+  background-color: #ea580c !important;
+  transform: translate(2px, 2px) !important;
+  box-shadow: 2px 2px 0px 0px rgba(15, 23, 42, 1) !important;
+}

@@ -28,6 +28,7 @@ import {
   readDungeonMap,
   validateMapJsonSchema,
 } from "../services/dungeonService";
+import dataLocal from "../services/dataLocal.json";
 
 // --- CẤU HÌNH BAN ĐẦU ---
 
@@ -205,11 +206,10 @@ export default function Editor() {
 
   const [unAuthorized, setUnAuthorized] = useState(false);
 
-  // Nạp dữ liệu map on-chain theo id
+  // Nạp dữ liệu map (từ on-chain hoặc dataLocal.json)
   useEffect(() => {
     let active = true;
     const load = async () => {
-      if (!id) return;
       setLoadingMap(true);
       setUnAuthorized(false);
       try {
@@ -217,38 +217,38 @@ export default function Editor() {
         await new Promise((resolve) => setTimeout(resolve, 500));
         if (!active) return;
 
-        const dungeon = await fetchDungeonById(id);
-        // Nếu component đã unmount hoặc dependencies thay đổi thì bỏ qua
-        if (!active) return;
+        let mapJson = null;
 
-        if (!dungeon) return;
-
-        console.log("Dungeon Owner:", dungeon.owner);
-
-        // Check ownership (Updated with case-insensitive check)
-        const isOwner = false;
-
-        if (!isOwner) {
-          console.warn("Ownership mismatch");
-          if (active) setUnAuthorized(true);
-          return;
+        // Nếu không có id hoặc load fail, dùng dataLocal.json
+        if (!mapJson) {
+          console.log("Loading from dataLocal.json");
+          mapJson = dataLocal;
         }
 
-        // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
-        const idToUse = dungeon.patchMapId || dungeon.blobId;
-        if (!idToUse) return;
-        const mapJson = await readDungeonMap(idToUse);
-        if (!active) return;
-        if (!validateMapJsonSchema(mapJson)) return;
+        // Get actual dimensions from layout
+        const actualHeight = mapJson.layout.length;
+        const actualWidth = Math.max(
+          ...mapJson.layout.map((row) => row.length)
+        );
 
         setMapSize({
-          width: mapJson.config.width,
-          height: mapJson.config.height,
+          width: actualWidth,
+          height: actualHeight,
         });
-        setMapData(mapJson.layout.map((row) => row.split("")));
+        console.log(mapJson);
+        // Convert "." to space and ensure all rows have same width
+        setMapData(
+          mapJson.layout.map((row) => {
+            const converted = row.replace(/\./g, " "); // Convert dot to space
+            const chars = converted.split("");
+            // Pad with spaces if needed
+            while (chars.length < actualWidth) chars.push(" ");
+            return chars;
+          })
+        );
 
         const nextWalls = { ...DEFAULT_WALLS };
-        Object.entries(mapJson.assets).forEach(([key, asset]) => {
+        Object.entries(mapJson.assets || {}).forEach(([key, asset]) => {
           if (["1", "2", "3"].includes(key) && asset.type === "color") {
             nextWalls[key] = {
               color: asset.value,
@@ -508,7 +508,7 @@ export default function Editor() {
         title: dungeonName || "Walrus Dungeon Map",
         created: new Date().toISOString(),
         engine: "Kaboom.js",
-        version: "1.1",
+        version: "2.0",
       },
       config: {
         width: mapSize.width,
@@ -518,6 +518,30 @@ export default function Editor() {
       assets: assetsExport,
       layout: mapData.map((row) => row.join("")),
     };
+  };
+
+  // Save to dataLocal.json (download file)
+  const handleSaveToLocal = () => {
+    if (!validateMap()) return;
+
+    try {
+      const mapJson = buildMapPayload();
+      const jsonString = JSON.stringify(mapJson, null, 2);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "dataLocal.json";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast("Map saved to dataLocal.json!", "success");
+    } catch (err) {
+      console.error(err);
+      showToast(err.message);
+    }
   };
 
   const handleSaveAndMint = async () => {
@@ -1097,12 +1121,12 @@ export default function Editor() {
                 </RetroButton>
 
                 <div className="flex gap-2">
-                  {/* <RetroButton
-                    onClick={handleExport}
+                  <RetroButton
+                    onClick={handleSaveToLocal}
                     className="bg-purple-500 hover:bg-purple-400 text-white flex items-center gap-2"
                   >
-                    <Download size={18} strokeWidth={3} /> SAVE
-                  </RetroButton> */}
+                    <Download size={18} strokeWidth={3} /> SAVE LOCAL
+                  </RetroButton>
                   <RetroButton
                     onClick={handleSaveAndMint}
                     className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"

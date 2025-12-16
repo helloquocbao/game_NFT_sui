@@ -167,7 +167,7 @@ export default function Play() {
       k.debug.inspect = true;
       k.debug.showArea = true;
       kaboomInstanceRef.current = k;
-      // TOP-DOWN MODE: Không có gravity
+      // 2D RPG TOP-DOWN MODE: Không có gravity
       k.setGravity(0);
 
       const validSprites = new Set();
@@ -206,39 +206,63 @@ export default function Play() {
         };
       });
 
+      // Default wall definitions nếu không có trong assets
+      const defaultWalls = {
+        1: "#f97316", // Orange
+        2: "#64748b", // Gray
+        3: "#78350f", // Brown
+      };
+
+      Object.entries(defaultWalls).forEach(([key, color]) => {
+        if (!tilesDef[key]) {
+          tilesDef[key] = () => [
+            k.rect(tileSize, tileSize),
+            k.color(k.Color.fromHex(color)),
+            k.area(),
+            k.body({ isStatic: true }),
+            `wall_${key}`,
+            "wall",
+          ];
+        }
+      });
+
+      // Floor/Grass tile (walkable)
+      tilesDef["."] = () => [
+        k.rect(tileSize, tileSize),
+        k.color(34, 139, 34), // Green grass
+        k.z(0), // Floor ở layer thấp nhất
+        "floor",
+      ];
+
+      // Void/Empty tile (deadly)
+      tilesDef[" "] = () => [
+        k.rect(tileSize, tileSize),
+        k.color(0, 0, 0), // Black void
+        k.area(),
+        k.z(0),
+        "void",
+      ];
+
       tilesDef["$"] = () => [
         k.circle(10),
         k.color(234, 179, 8),
 
-        k.area(),
         k.pos(16, 16),
         "coin",
       ];
 
       tilesDef["@"] = () => {
         const comps = [
-          // 1️⃣ GỐC CHUNG
-          k.pos(32, 32),
-          k.anchor(k.vec2(0.2, 0.5)),
-
-          // 2️⃣ CHỈ 1 SPRITE DUY NHẤT
           k.sprite("idle", {
             width: 32,
             height: 32,
           }),
-
-          // 3️⃣ HITBOX CHUẨN RPG (CHỈ PHẦN THÂN + CHÂN)
           k.area({
-            shape: new k.Rect(
-              k.vec2(0, 7), // đẩy lên nhẹ
-              25, // thân người
-              25 // thân + chân
-            ),
+            shape: new k.Rect(k.vec2(0, 7), 28, 30),
           }),
-
-          // 4️⃣ VẬT LÝ
           k.body(),
-
+          k.anchor("bot"),
+          k.z(1), // Player luôn trên floor
           "player",
         ];
 
@@ -271,15 +295,39 @@ export default function Play() {
         };
       }
 
+      // Enemy out of bounds checker
+      function outOfBoundsChecker() {
+        return {
+          id: "outOfBoundsChecker",
+          require: ["pos"],
+          update() {
+            const mapHeight = settings.layout.length * tileSize;
+            const mapWidth = settings.layout[0].length * tileSize;
+
+            // Ra khỏi map thì destroy
+            if (
+              this.pos.y > mapHeight + 50 ||
+              this.pos.y < -50 ||
+              this.pos.x > mapWidth + 50 ||
+              this.pos.x < -50
+            ) {
+              k.addKaboom(this.pos);
+              k.destroy(this);
+            }
+          },
+        };
+      }
+
       tilesDef["E"] = () => [
         k.rect(24, 24),
         k.color(168, 85, 247),
-
         k.area(),
         k.body(),
         k.anchor("center"),
         k.pos(16, 16),
+        k.z(1), // Enemy cùng layer với player
         enemyWithHp(),
+        outOfBoundsChecker(),
         // patrol(),
         "enemy",
         "danger",
@@ -380,7 +428,7 @@ export default function Play() {
             if (players.length > 0) {
               const player = players[0];
               const SPEED = 150; // TOP-DOWN: Walking speed
-
+              const deathPointOffset = k.vec2(0, 8);
               // Player HP system
               player.maxHp = 2;
               player.hp = 2;
@@ -406,7 +454,7 @@ export default function Play() {
               // Vẽ vòng tròn tầm đánh của player
               // Tạo polygon nhiều cạnh để xấp xỉ hình tròn (16 cạnh)
               const circlePoints = [];
-              const radius = 25;
+              const radius = 22;
               const sides = 16;
               for (let i = 0; i < sides; i++) {
                 const angle = (i / sides) * Math.PI * 2;
@@ -415,15 +463,79 @@ export default function Play() {
                 );
               }
 
+              let isDead = false; // Flag để tránh chết nhiều lần
+              player.onUpdate(() => {
+                if (isDead) return;
+
+                // Tọa độ tâm đỏ
+                const deathPoint = player.pos.add(deathPointOffset);
+
+                // Lấy toàn bộ void tile
+                const voids = level.get("void");
+
+                for (const v of voids) {
+                  const left = v.pos.x;
+                  const right = v.pos.x + tileSize;
+                  const top = v.pos.y;
+                  const bottom = v.pos.y + tileSize;
+
+                  if (
+                    deathPoint.x >= left &&
+                    deathPoint.x <= right &&
+                    deathPoint.y >= top &&
+                    deathPoint.y <= bottom
+                  ) {
+                    // 💀 CHẾT
+                    isDead = true;
+                    player.hp = 0;
+
+                    k.shake(30);
+                    k.addKaboom(player.pos);
+
+                    setTimeout(() => {
+                      k.go("main");
+                    }, 800);
+
+                    break;
+                  }
+                }
+              });
               const attackRangeCircle = k.add([
-                k.pos(player.pos),
-                k.circle(20), // Vẽ hình tròn
+                k.pos(player.pos.add(0, -15)), // Offset lên trên 15px
+                k.circle(24), // Vẽ hình tròn
                 k.area({ shape: new k.Polygon(circlePoints) }), // Hitbox polygon xấp xỉ hình tròn
                 k.opacity(0),
                 k.z(999),
                 {
                   update() {
-                    this.pos = player.pos;
+                    this.pos = player.pos.add(0, -15); // Offset lên trên 15px
+
+                    // Kiểm tra nếu TÂM ANCHOR (bottom-center point) chạm void thì player chết
+                    if (!isDead) {
+                      const voids = level.get("void");
+                      for (const voidTile of voids) {
+                        // Player anchor là "bot" nên player.pos là điểm bottom-center
+                        // Void tile có area, dùng isOverlapping để check điểm chính xác
+                        const anchorPoint = player.pos;
+
+                        // Check if anchor point is inside void tile area
+                        if (
+                          anchorPoint.x > voidTile.pos.x &&
+                          anchorPoint.x < voidTile.pos.x + tileSize &&
+                          anchorPoint.y > voidTile.pos.y &&
+                          anchorPoint.y < voidTile.pos.y + tileSize
+                        ) {
+                          isDead = true;
+                          player.hp = 0;
+                          k.shake(30);
+                          k.addKaboom(player.pos);
+                          setTimeout(() => {
+                            k.go("main");
+                          }, 1000);
+                          break;
+                        }
+                      }
+                    }
                   },
                 },
               ]);
@@ -450,7 +562,7 @@ export default function Play() {
                 updateHpDisplay();
               });
 
-              // TOP-DOWN: 4-directional movement (no jump)
+              // 2D RPG: 4-directional movement
               const keys = {
                 left: false,
                 right: false,
@@ -501,9 +613,6 @@ export default function Play() {
 
                 lastAttackTime = now;
                 isAttacking = true;
-
-                // Hiển thị vòng tròn tầm đánh
-                attackRangeCircle.opacity = 0.5;
 
                 // Play attack animation
                 try {
@@ -585,6 +694,25 @@ export default function Play() {
               let playerDirection = false; // false = right, true = left
 
               player.onUpdate(() => {
+                // Kiểm tra rơi chết (ra khỏi map)
+                const mapHeight = settings.layout.length * tileSize;
+                const mapWidth = settings.layout[0].length * tileSize;
+
+                if (
+                  player.pos.y > mapHeight + 50 ||
+                  player.pos.y < -50 ||
+                  player.pos.x > mapWidth + 50 ||
+                  player.pos.x < -50
+                ) {
+                  player.hp = 0;
+                  k.shake(30);
+                  k.addKaboom(player.pos);
+                  setTimeout(() => {
+                    k.go("main");
+                  }, 1000);
+                  return;
+                }
+
                 let vx = 0;
                 let vy = 0;
                 if (keys.left) vx = -SPEED;
@@ -604,10 +732,9 @@ export default function Play() {
                   player.flipX = false;
                 }
 
-                // Move player based on keys - use direct position update for top-down
+                // Move player in 4 directions (top-down)
                 if (isMoving) {
-                  player.pos.x += vx * k.dt();
-                  player.pos.y += vy * k.dt();
+                  player.move(vx, vy);
 
                   // Play run animation khi moving
                   if (!wasMoving) {
@@ -636,35 +763,6 @@ export default function Play() {
               player.onCollide("coin", (c) => {
                 k.destroy(c);
                 k.shake(2);
-              });
-
-              // Handle trap and enemy collision - damage player
-              let lastDamageTime = 0;
-              const damageCooldown = 500; // ms between damage hits
-
-              player.onCollide("danger", () => {
-                const now = Date.now();
-                if (now - lastDamageTime < damageCooldown) return;
-
-                lastDamageTime = now;
-                player.hp -= 1; // Lose 1 HP per hit
-                k.shake(10);
-
-                if (player.hp <= 0) {
-                  player.hp = 0;
-                  k.shake(30);
-                  // Play death animation
-                  try {
-                    player.use(k.sprite("death"));
-                    player.play("death");
-                  } catch {}
-                  k.addKaboom(player.pos);
-
-                  // Game Over after 1 second
-                  setTimeout(() => {
-                    k.go("main"); // Restart game
-                  }, 1000);
-                }
               });
             }
 

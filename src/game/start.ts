@@ -15,8 +15,8 @@ export function startGame() {
     height: 540,
     background: [0, 0, 0],
   });
-  debug.inspect = true;
-  debug.showArea = true;
+  // debug.inspect = true;
+  // debug.showArea = true;
   loadSprite("player", "/sprites/player/Idle.png", {
     sliceX: 4,
     sliceY: 1,
@@ -80,6 +80,7 @@ export function startGame() {
         speed: 200,
         hp: 3,
         facing: vec2(1, 0),
+        spawnPos: vec2(64, 64), // ✅ FIX
       },
 
       "player",

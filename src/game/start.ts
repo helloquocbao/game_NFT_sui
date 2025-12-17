@@ -45,20 +45,49 @@ export function startGame() {
     },
   });
 
-  scene("game", () => {
-    const map = [
-      "############################",
-      "#............^.............#",
-      "#..........................#",
-      "#..............######......#",
-      "#..............^...........#",
-      "#..........................#",
-      "############################",
-    ];
+  function loadMapFromStorage() {
+    const raw = localStorage.getItem("CUSTOM_MAP");
+    if (!raw) return null;
+    return JSON.parse(raw);
+  }
 
-    addLevel(map, {
-      tileWidth: TILE,
-      tileHeight: TILE,
+  function gridToLevel(grid: number[][]) {
+    return grid.map((row) =>
+      row
+        .map((cell) => {
+          if (cell === 1) return "#";
+          if (cell === 2) return "^";
+          return ".";
+        })
+        .join("")
+    );
+  }
+
+  function findSpawn(grid: number[][], tileSize: number) {
+    for (let y = 0; y < grid.length; y++) {
+      for (let x = 0; x < grid[y].length; x++) {
+        if (grid[y][x] === 3) {
+          return vec2(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2);
+        }
+      }
+    }
+    return vec2(64, 64); // fallback
+  }
+
+  scene("game", () => {
+    const mapData = loadMapFromStorage();
+
+    if (!mapData) {
+      add([text("NO MAP FOUND"), pos(center()), anchor("center")]);
+      return;
+    }
+
+    const level = gridToLevel(mapData.grid);
+    const spawnPos = findSpawn(mapData.grid, mapData.tileSize);
+
+    addLevel(level, {
+      tileWidth: mapData.tileSize,
+      tileHeight: mapData.tileSize,
       tiles: {
         "#": () => [
           rect(TILE, TILE),
@@ -93,12 +122,17 @@ export function startGame() {
         speed: 200,
         hp: 3,
         facing: 1,
-        spawnPos: vec2(64, 64), // ✅ FIX
+        spawnPos: spawnPos,
         moving: false,
         attacking: false,
       },
       "player",
     ]);
+
+    // 🎥 CAMERA FOLLOW
+    onUpdate(() => {
+      camPos(player.pos);
+    });
 
     const debugBox = add([
       rect(HITBOX_W, HITBOX_H),
@@ -195,7 +229,7 @@ export function startGame() {
 
       player.use(sprite("player-attack"));
       player.play("attack");
-
+      player.flipX = player.facing === -1;
       // 🔥 tạo hitbox ở frame chém
       wait(0.1, () => {
         spawnAttackHitbox();
@@ -302,10 +336,6 @@ export function startGame() {
       player.moving = true;
     });
     onKeyPress("space", () => attack());
-    // 🎥 CAMERA FOLLOW
-    onUpdate(() => {
-      camPos(player.pos);
-    });
   });
 
   go("game");

@@ -14,10 +14,11 @@ export function startGame() {
     width: 960,
     height: 540,
     background: [0, 0, 0],
+    scale: 1,
   });
   // debug.inspect = true;
   // debug.showArea = true;
-  loadSprite("player", "/sprites/player/Idle.png", {
+  loadSprite("player-idle", "/sprites/player/Idle.png", {
     sliceX: 4,
     sliceY: 1,
     anims: {
@@ -27,6 +28,20 @@ export function startGame() {
         speed: 6,
         loop: true,
       },
+    },
+  });
+
+  loadSprite("player-run", "/sprites/player/Run.png", {
+    sliceX: 6,
+    anims: {
+      run: { from: 0, to: 5, speed: 10, loop: true },
+    },
+  });
+
+  loadSprite("player-attack", "/sprites/player/Attack.png", {
+    sliceX: 6,
+    anims: {
+      attack: { from: 0, to: 5, speed: 10, loop: true },
     },
   });
 
@@ -62,27 +77,26 @@ export function startGame() {
       },
     });
 
-    const HITBOX_W = 20;
+    const HITBOX_W = 18;
     const HITBOX_H = 30;
 
     const player = add([
-      sprite("player", { anim: "idle" }),
+      sprite("player-idle", { anim: "idle" }),
       pos(64, 64),
-
       area({
         shape: new Rect(vec2(0, 0), HITBOX_W, HITBOX_H),
       }),
 
       body({ gravityScale: 0 }),
       anchor("center"),
-
       {
         speed: 200,
         hp: 3,
-        facing: vec2(1, 0),
+        facing: 1,
         spawnPos: vec2(64, 64), // ✅ FIX
+        moving: false,
+        attacking: false,
       },
-
       "player",
     ]);
 
@@ -118,10 +132,10 @@ export function startGame() {
         "enemy",
       ]);
 
-      enemy.onUpdate(() => {
-        enemy.move(enemy.speed * enemy.dir, 0);
-        if (time() % 2 < 0.02) enemy.dir *= -1;
-      });
+      // enemy.onUpdate(() => {
+      //   enemy.move(enemy.speed * enemy.dir, 0);
+      //   if (time() % 2 < 0.02) enemy.dir *= -1;
+      // });
 
       return enemy;
     }
@@ -150,14 +164,17 @@ export function startGame() {
       }
     }
 
-    function attack() {
-      const dir = player.facing;
+    function spawnAttackHitbox() {
+      const ATTACK_DISTANCE = 22;
+      const ATTACK_W = 14;
+      const ATTACK_H = 20;
 
       const hitbox = add([
-        rect(20, 20),
-        pos(player.pos.add(dir.scale(20))),
-        area(),
-        opacity(0),
+        pos(player.pos.x + player.facing * ATTACK_DISTANCE, player.pos.y),
+        area({
+          shape: new Rect(vec2(0), ATTACK_W, ATTACK_H),
+        }),
+        anchor("center"),
         lifespan(0.1),
         "attack",
       ]);
@@ -165,11 +182,36 @@ export function startGame() {
       hitbox.onCollide("enemy", (e) => {
         e.hp -= 1;
 
-        const knockDir = e.pos.sub(player.pos).unit();
+        const knockDir = vec2(player.facing, 0);
         e.move(knockDir.scale(300));
 
-        if (e.hp <= 0) {
-          destroy(e);
+        if (e.hp <= 0) destroy(e);
+      });
+    }
+
+    function attack() {
+      if (player.attacking) return; // ❌ không spam
+      player.attacking = true;
+
+      player.use(sprite("player-attack"));
+      player.play("attack");
+
+      // 🔥 tạo hitbox ở frame chém
+      wait(0.1, () => {
+        spawnAttackHitbox();
+      });
+
+      // ⏱ kết thúc attack
+      wait(0.45, () => {
+        player.attacking = false;
+
+        // quay về anim đúng trạng thái
+        if (player.moving) {
+          player.use(sprite("player-run"));
+          player.play("run");
+        } else {
+          player.use(sprite("player-idle"));
+          player.play("idle");
         }
       });
     }
@@ -195,6 +237,23 @@ export function startGame() {
     let dangerSource: GameObj | null = null;
 
     player.onUpdate(() => {
+      if (player.attacking) return;
+
+      player.flipX = player.facing === -1;
+      if (player.moving) {
+        if (player.curAnim() !== "run") {
+          player.use(sprite("player-run"));
+          player.play("run");
+        }
+      } else {
+        if (player.curAnim() !== "idle") {
+          player.use(sprite("player-idle"));
+          player.play("idle");
+        }
+      }
+
+      // reset cho frame sau
+      player.moving = false;
       if (!player.inDanger) {
         player.damageTimer = 0;
         return;
@@ -211,17 +270,38 @@ export function startGame() {
     });
 
     onKeyDown("a", () => {
+      if (player.attacking) return;
+
       player.move(-player.speed, 0);
       player.facing = vec2(-1, 0);
+      player.moving = true;
+      player.facing = -1;
+      player.flipX = true; // 👈 lật sang trái
     });
     onKeyDown("d", () => {
+      if (player.attacking) return;
+
       player.move(player.speed, 0);
       player.facing = vec2(1, 0);
+      player.moving = true;
+      player.facing = 1;
+      player.flipX = false; // 👈 lật sang phải
     });
 
-    onKeyDown("w", () => player.move(0, -player.speed));
-    onKeyDown("s", () => player.move(0, player.speed));
-    onKeyPress("space", attack);
+    onKeyDown("w", () => {
+      if (player.attacking) return;
+
+      player.move(0, -player.speed);
+      player.moving = true;
+    });
+
+    onKeyDown("s", () => {
+      if (player.attacking) return;
+
+      player.move(0, player.speed);
+      player.moving = true;
+    });
+    onKeyPress("space", () => attack());
     // 🎥 CAMERA FOLLOW
     onUpdate(() => {
       camPos(player.pos);

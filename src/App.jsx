@@ -1,18 +1,10 @@
-import { Routes, Route } from 'react-router-dom'
-import './App.css'
-import Home from './pages/Home'
-import Editor from './pages/Editor'
-import Play from './pages/Play'
+import { Routes, Route } from "react-router-dom";
+import GamePage from "./pages/GamePage";
 
-function App() {
+export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/editor" element={<Editor />} />
-      <Route path="/editor/:id" element={<Editor />} />
-      <Route path="/play/:id" element={<Play />} />
+      <Route path="/game" element={<GamePage />} />
     </Routes>
-  )
+  );
 }
-
-export default App

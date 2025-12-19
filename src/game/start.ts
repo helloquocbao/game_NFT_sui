@@ -16,8 +16,8 @@ export function startGame() {
     background: [0, 0, 0],
     scale: 1,
   });
-  // debug.inspect = true;
-  // debug.showArea = true;
+  debug.inspect = true;
+  debug.showArea = true;
   loadSprite("player-idle", "/sprites/player/Idle.png", {
     sliceX: 4,
     sliceY: 1,
@@ -79,6 +79,7 @@ export function startGame() {
         .map((cell) => {
           if (cell === 1) return "#";
           if (cell === 2) return "^";
+          if (cell === 5) return "=";
           return ".";
         })
         .join("")
@@ -98,7 +99,7 @@ export function startGame() {
 
   scene("game", () => {
     const mapData = loadMapFromStorage();
-
+    console.log("Loaded map data:", mapData);
     if (!mapData || !mapData.grid) {
       add([text("NO MAP FOUND"), pos(center()), anchor("center")]);
       return;
@@ -116,15 +117,18 @@ export function startGame() {
           color(120, 120, 120),
           area(),
           body({ isStatic: true }),
+          "ground",
         ],
-        ".": () => [rect(TILE, TILE), color(30, 30, 30)],
+        ".": () => [],
         "^": () => [
           rect(TILE, TILE),
           color(255, 0, 0),
           area(),
           body({ isStatic: true }),
           "trap",
+          "ground",
         ],
+        "=": () => [rect(TILE, TILE), color(84, 110, 122), "ground"],
       },
     });
 
@@ -147,6 +151,7 @@ export function startGame() {
         spawnPos: spawnPos,
         moving: false,
         attacking: false,
+        spawnProtection: 0,
       },
       "player",
     ]);
@@ -170,6 +175,7 @@ export function startGame() {
     function respawnPlayer() {
       player.hp = 3;
       player.pos = player.spawnPos.clone();
+      player.spawnProtection = 0.5; // 0.5 giây bảo vệ sau khi spawn
     }
 
     function hitPlayer(from?: GameObj, knockback = true) {
@@ -316,6 +322,30 @@ export function startGame() {
         }
       }
 
+      // Giảm spawn protection
+      if (player.spawnProtection > 0) {
+        player.spawnProtection -= dt();
+      }
+
+      // Kiểm tra xem player có đứng trên ground không (luôn luôn check)
+      const playerGridX = Math.floor(player.pos.x / mapData.tileSize);
+      const playerGridY = Math.floor(player.pos.y / mapData.tileSize);
+
+      if (
+        playerGridX < 0 ||
+        playerGridX >= mapData.width ||
+        playerGridY < 0 ||
+        playerGridY >= mapData.height ||
+        (mapData.grid[playerGridY] &&
+          mapData.grid[playerGridY][playerGridX] === 0)
+      ) {
+        // Không có ground bên dưới -> rơi xuống hố -> chết ngay lập tức
+        if (player.spawnProtection <= 0) {
+          respawnPlayer();
+          return;
+        }
+      }
+
       // reset cho frame sau
       player.moving = false;
       if (!player.inDanger) {
@@ -337,7 +367,6 @@ export function startGame() {
       if (player.attacking) return;
 
       player.move(-player.speed, 0);
-      player.facing = vec2(-1, 0);
       player.moving = true;
       player.facing = -1;
       player.flipX = true; // 👈 lật sang trái
@@ -346,7 +375,6 @@ export function startGame() {
       if (player.attacking) return;
 
       player.move(player.speed, 0);
-      player.facing = vec2(1, 0);
       player.moving = true;
       player.facing = 1;
       player.flipX = false; // 👈 lật sang phải

@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
  * 2 = trap
  * 3 = player spawn
  * 4 = enemy
+ * 5 = floor
  */
 
 const TILE_SIZE = 32;
@@ -15,11 +16,12 @@ const MAP_W = 20;
 const MAP_H = 12;
 
 const TILE_COLORS: Record<number, string> = {
-  0: "#222",
+  0: "#000",
   1: "#888",
   2: "#e53935",
   3: "#29b6f6",
   4: "#ff5050",
+  5: "#546e7a",
 };
 
 export default function EditorGame() {
@@ -39,7 +41,6 @@ export default function EditorGame() {
 
   function loadMap() {
     const raw = localStorage.getItem("CUSTOM_MAP");
-    console.log("LOAD MAP:", raw);
     if (!raw) return;
 
     try {
@@ -144,6 +145,12 @@ export default function EditorGame() {
           color={TILE_COLORS[4]}
           active={selectedTile === 4}
           onClick={() => setSelectedTile(4)}
+        />
+        <TileButton
+          label="Floor"
+          color={TILE_COLORS[5]}
+          active={selectedTile === 5}
+          onClick={() => setSelectedTile(5)}
         />
       </div>
 

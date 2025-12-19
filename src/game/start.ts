@@ -87,13 +87,26 @@ export function startGame() {
   }
 
   function findSpawn(grid: number[][], tileSize: number) {
+    // Tìm tất cả floor tiles
+    const floorTiles: { x: number; y: number }[] = [];
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] === 3) {
-          return vec2(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2);
+        if (grid[y][x] === 5) {
+          floorTiles.push({ x, y });
         }
       }
     }
+
+    // Random chọn 1 floor tile
+    if (floorTiles.length > 0) {
+      const randomTile =
+        floorTiles[Math.floor(Math.random() * floorTiles.length)];
+      return vec2(
+        randomTile.x * tileSize + tileSize / 2,
+        randomTile.y * tileSize + tileSize / 2
+      );
+    }
+
     return vec2(64, 64); // fallback
   }
 

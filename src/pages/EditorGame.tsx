@@ -6,7 +6,6 @@ import { useNavigate } from "react-router-dom";
  * 0 = empty
  * 1 = wall
  * 2 = trap
- * 3 = player spawn
  * 4 = enemy
  * 5 = floor
  */
@@ -19,7 +18,6 @@ const TILE_COLORS: Record<number, string> = {
   0: "#000",
   1: "#888",
   2: "#e53935",
-  3: "#29b6f6",
   4: "#ff5050",
   5: "#546e7a",
 };
@@ -84,16 +82,6 @@ export default function EditorGame() {
 
   function paint(x: number, y: number) {
     const copy = grid.map((row) => [...row]);
-
-    // chỉ cho 1 player spawn
-    if (selectedTile === 3) {
-      for (let j = 0; j < MAP_H; j++) {
-        for (let i = 0; i < MAP_W; i++) {
-          if (copy[j][i] === 3) copy[j][i] = 0;
-        }
-      }
-    }
-
     copy[y][x] = selectedTile;
     setGrid(copy);
   }
@@ -135,22 +123,22 @@ export default function EditorGame() {
           onClick={() => setSelectedTile(2)}
         />
         <TileButton
-          label="Spawn"
-          color={TILE_COLORS[3]}
-          active={selectedTile === 3}
-          onClick={() => setSelectedTile(3)}
+          label="Floor"
+          color={TILE_COLORS[5]}
+          active={selectedTile === 5}
+          onClick={() => setSelectedTile(5)}
+        />
+        <TileButton
+          label="Trap"
+          color={TILE_COLORS[2]}
+          active={selectedTile === 2}
+          onClick={() => setSelectedTile(2)}
         />
         <TileButton
           label="Enemy"
           color={TILE_COLORS[4]}
           active={selectedTile === 4}
           onClick={() => setSelectedTile(4)}
-        />
-        <TileButton
-          label="Floor"
-          color={TILE_COLORS[5]}
-          active={selectedTile === 5}
-          onClick={() => setSelectedTile(5)}
         />
       </div>
 

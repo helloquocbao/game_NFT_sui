@@ -7,7 +7,10 @@ import { useNavigate } from "react-router-dom";
  * 1 = wall
  * 2 = trap
  * 4 = enemy
- * 5 = floor
+ * 5 = floor 1
+ * 6 = floor 2
+ * 7 = floor 3
+ * 8 = floor 4
  */
 
 const TILE_SIZE = 32;
@@ -20,6 +23,9 @@ const TILE_COLORS: Record<number, string> = {
   2: "#e53935",
   4: "#ff5050",
   5: "#546e7a",
+  6: "#607d8b",
+  7: "#78909c",
+  8: "#90a4ae",
 };
 
 export default function EditorGame() {
@@ -123,10 +129,28 @@ export default function EditorGame() {
           onClick={() => setSelectedTile(2)}
         />
         <TileButton
-          label="Floor"
+          label="Floor 1"
           color={TILE_COLORS[5]}
           active={selectedTile === 5}
           onClick={() => setSelectedTile(5)}
+        />
+        <TileButton
+          label="Floor 2"
+          color={TILE_COLORS[6]}
+          active={selectedTile === 6}
+          onClick={() => setSelectedTile(6)}
+        />
+        <TileButton
+          label="Floor 3"
+          color={TILE_COLORS[7]}
+          active={selectedTile === 7}
+          onClick={() => setSelectedTile(7)}
+        />
+        <TileButton
+          label="Floor 4"
+          color={TILE_COLORS[8]}
+          active={selectedTile === 8}
+          onClick={() => setSelectedTile(8)}
         />
         <TileButton
           label="Trap"

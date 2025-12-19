@@ -16,8 +16,8 @@ export function startGame() {
     background: [0, 0, 0],
     scale: 1,
   });
-  debug.inspect = true;
-  debug.showArea = true;
+  // debug.inspect = true;
+  // debug.showArea = true;
   loadSprite("player-idle", "/sprites/player/Idle.png", {
     sliceX: 4,
     sliceY: 1,
@@ -80,6 +80,9 @@ export function startGame() {
           if (cell === 1) return "#";
           if (cell === 2) return "^";
           if (cell === 5) return "=";
+          if (cell === 6) return "~";
+          if (cell === 7) return "-";
+          if (cell === 8) return "_";
           return ".";
         })
         .join("")
@@ -87,11 +90,16 @@ export function startGame() {
   }
 
   function findSpawn(grid: number[][], tileSize: number) {
-    // Tìm tất cả floor tiles
+    // Tìm tất cả floor tiles (5, 6, 7, 8)
     const floorTiles: { x: number; y: number }[] = [];
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] === 5) {
+        if (
+          grid[y][x] === 5 ||
+          grid[y][x] === 6 ||
+          grid[y][x] === 7 ||
+          grid[y][x] === 8
+        ) {
           floorTiles.push({ x, y });
         }
       }
@@ -142,6 +150,9 @@ export function startGame() {
           "ground",
         ],
         "=": () => [rect(TILE, TILE), color(84, 110, 122), "ground"],
+        "~": () => [rect(TILE, TILE), color(96, 125, 139), "ground"],
+        "-": () => [rect(TILE, TILE), color(120, 144, 156), "ground"],
+        _: () => [rect(TILE, TILE), color(144, 164, 174), "ground"],
       },
     });
 
@@ -344,13 +355,19 @@ export function startGame() {
       const playerGridX = Math.floor(player.pos.x / mapData.tileSize);
       const playerGridY = Math.floor(player.pos.y / mapData.tileSize);
 
+      const currentTile = mapData.grid[playerGridY]?.[playerGridX];
+      const isOnFloor =
+        currentTile === 5 ||
+        currentTile === 6 ||
+        currentTile === 7 ||
+        currentTile === 8;
+
       if (
         playerGridX < 0 ||
         playerGridX >= mapData.width ||
         playerGridY < 0 ||
         playerGridY >= mapData.height ||
-        (mapData.grid[playerGridY] &&
-          mapData.grid[playerGridY][playerGridX] === 0)
+        !isOnFloor
       ) {
         // Không có ground bên dưới -> rơi xuống hố -> chết ngay lập tức
         if (player.spawnProtection <= 0) {

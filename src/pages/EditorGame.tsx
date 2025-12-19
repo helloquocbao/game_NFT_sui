@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
  * 1 = wall
  * 2 = trap
  * 3 = player spawn
+ * 4 = enemy
  */
 
 const TILE_SIZE = 32;
@@ -18,6 +19,7 @@ const TILE_COLORS: Record<number, string> = {
   1: "#888",
   2: "#e53935",
   3: "#29b6f6",
+  4: "#ff5050",
 };
 
 export default function EditorGame() {
@@ -30,6 +32,54 @@ export default function EditorGame() {
       .fill(0)
       .map(() => Array(MAP_W).fill(0))
   );
+
+  useEffect(() => {
+    loadMap();
+  }, []);
+
+  function loadMap() {
+    const raw = localStorage.getItem("CUSTOM_MAP");
+    console.log("LOAD MAP:", raw);
+    if (!raw) return;
+
+    try {
+      const data = JSON.parse(raw);
+
+      // Xử lý format cũ (tiles object)
+      if (data.tiles && !data.grid) {
+        const width = data.width || MAP_W;
+        const height = data.height || MAP_H;
+        const newGrid = Array(MAP_H)
+          .fill(0)
+          .map(() => Array(MAP_W).fill(0));
+
+        for (const [key, value] of Object.entries(data.tiles)) {
+          const [x, y] = key.split(",").map(Number);
+          if (y < MAP_H && x < MAP_W) {
+            newGrid[y][x] = value as number;
+          }
+        }
+
+        setGrid(newGrid);
+      }
+      // Format mới (grid array)
+      else if (data.grid) {
+        setGrid(data.grid);
+      }
+    } catch (e) {
+      console.error("Failed to load map:", e);
+    }
+  }
+
+  function clearMap() {
+    if (confirm("Xóa toàn bộ map?")) {
+      setGrid(
+        Array(MAP_H)
+          .fill(0)
+          .map(() => Array(MAP_W).fill(0))
+      );
+    }
+  }
 
   function paint(x: number, y: number) {
     const copy = grid.map((row) => [...row]);
@@ -89,6 +139,12 @@ export default function EditorGame() {
           active={selectedTile === 3}
           onClick={() => setSelectedTile(3)}
         />
+        <TileButton
+          label="Enemy"
+          color={TILE_COLORS[4]}
+          active={selectedTile === 4}
+          onClick={() => setSelectedTile(4)}
+        />
       </div>
 
       {/* GRID */}
@@ -120,6 +176,8 @@ export default function EditorGame() {
       {/* ACTIONS */}
       <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
         <button onClick={saveMap}>💾 Save</button>
+        <button onClick={loadMap}>📂 Load</button>
+        <button onClick={clearMap}>🗑️ Clear</button>
         <button onClick={() => navigate("/game")}>▶ Play</button>
       </div>
     </div>

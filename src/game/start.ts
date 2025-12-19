@@ -48,7 +48,29 @@ export function startGame() {
   function loadMapFromStorage() {
     const raw = localStorage.getItem("CUSTOM_MAP");
     if (!raw) return null;
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+
+    // Convert old tiles format to grid format
+    if (data.tiles && !data.grid) {
+      const width = data.width || 20;
+      const height = data.height || 12;
+      const grid = Array(height)
+        .fill(0)
+        .map(() => Array(width).fill(0));
+
+      for (const [key, value] of Object.entries(data.tiles)) {
+        const [x, y] = key.split(",").map(Number);
+        if (y < height && x < width) {
+          grid[y][x] = value as number;
+        }
+      }
+
+      data.grid = grid;
+      data.width = width;
+      data.height = height;
+    }
+
+    return data;
   }
 
   function gridToLevel(grid: number[][]) {
@@ -77,7 +99,7 @@ export function startGame() {
   scene("game", () => {
     const mapData = loadMapFromStorage();
 
-    if (!mapData) {
+    if (!mapData || !mapData.grid) {
       add([text("NO MAP FOUND"), pos(center()), anchor("center")]);
       return;
     }
@@ -111,7 +133,7 @@ export function startGame() {
 
     const player = add([
       sprite("player-idle", { anim: "idle" }),
-      pos(64, 64),
+      pos(spawnPos),
       area({
         shape: new Rect(vec2(0, 0), HITBOX_W, HITBOX_H),
       }),
@@ -150,42 +172,18 @@ export function startGame() {
       player.pos = player.spawnPos.clone();
     }
 
-    function spawnEnemy(x: number, y: number) {
-      const enemy = add([
-        rect(24, 24),
-        pos(x, y),
-        color(255, 80, 80),
-        area(),
-        body({ gravityScale: 0 }),
-        anchor("center"),
-        {
-          speed: 100,
-          dir: 1,
-          hp: 3,
-        },
-        "enemy",
-      ]);
-
-      // enemy.onUpdate(() => {
-      //   enemy.move(enemy.speed * enemy.dir, 0);
-      //   if (time() % 2 < 0.02) enemy.dir *= -1;
-      // });
-
-      return enemy;
-    }
-
     function hitPlayer(from?: GameObj, knockback = true) {
       if (player.invincible) return;
 
       player.hp -= 1;
-      console.log("HP:", player.hp);
 
       player.invincible = true;
       player.opacity = 0.5;
 
-      if (from && knockback) {
-        const dir = player.pos.sub(from.pos).unit();
-        player.pos = player.pos.add(dir.scale(24)); // ✅ ĐẨY TRỰC TIẾP
+      if (knockback) {
+        // Giật lùi về phía sau lưng (ngược với hướng đang đối mặt)
+        const knockbackDir = vec2(-player.facing, 0);
+        player.pos = player.pos.add(knockbackDir.scale(24));
       }
 
       wait(0.5, () => {
@@ -249,8 +247,40 @@ export function startGame() {
         }
       });
     }
+    function spawnEnemy(x: number, y: number) {
+      const enemy = add([
+        rect(24, 24),
+        pos(x, y),
+        color(255, 80, 80),
+        area(),
+        body({ gravityScale: 0 }),
+        anchor("center"),
+        {
+          speed: 100,
+          dir: 1,
+          hp: 3,
+        },
+        "enemy",
+      ]);
 
-    spawnEnemy(200, 200);
+      // enemy.onUpdate(() => {
+      //   enemy.move(enemy.speed * enemy.dir, 0);
+      //   if (time() % 2 < 0.02) enemy.dir *= -1;
+      // });
+
+      return enemy;
+    }
+    // Spawn enemies from map
+    for (let y = 0; y < mapData.grid.length; y++) {
+      for (let x = 0; x < mapData.grid[y].length; x++) {
+        if (mapData.grid[y][x] === 4) {
+          spawnEnemy(
+            x * mapData.tileSize + mapData.tileSize / 2,
+            y * mapData.tileSize + mapData.tileSize / 2
+          );
+        }
+      }
+    }
 
     player.onCollide("enemy", (e) => {
       hitPlayer(e, true); // văng + trừ 1 máu

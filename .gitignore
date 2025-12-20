@@ -25,3 +25,5 @@ dist-ssr
 
 template
 move_contract/build
+
+.env

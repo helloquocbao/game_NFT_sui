@@ -3,6 +3,7 @@ import kaboom, { GameObj } from "kaboom";
 
 let started = false;
 const TILE = 32;
+const CHUNK_SIZE = 16;
 
 export function startGame() {
   if (started) return;
@@ -52,8 +53,8 @@ export function startGame() {
 
     // Convert old tiles format to grid format
     if (data.tiles && !data.grid) {
-      const width = data.width || 20;
-      const height = data.height || 12;
+      const width = data.width || 10;
+      const height = data.height || 10;
       const grid = Array(height)
         .fill(0)
         .map(() => Array(width).fill(0));
@@ -68,6 +69,53 @@ export function startGame() {
       data.grid = grid;
       data.width = width;
       data.height = height;
+    }
+
+    if (data?.chunks) {
+      const chunkSize = data.chunkSize || CHUNK_SIZE;
+      const keys = Object.keys(data.chunks);
+      if (keys.length === 0) return null;
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      for (const key of keys) {
+        const [cx, cy] = key.split(",").map(Number);
+        minX = Math.min(minX, cx);
+        minY = Math.min(minY, cy);
+        maxX = Math.max(maxX, cx);
+        maxY = Math.max(maxY, cy);
+      }
+
+      const width = (maxX - minX + 1) * chunkSize;
+      const height = (maxY - minY + 1) * chunkSize;
+      const grid = Array(height)
+        .fill(0)
+        .map(() => Array(width).fill(0));
+
+      for (const key of keys) {
+        const [cx, cy] = key.split(",").map(Number);
+        const chunk = data.chunks[key];
+        for (let y = 0; y < chunkSize; y++) {
+          for (let x = 0; x < chunkSize; x++) {
+            const value = chunk[y]?.[x] ?? 0;
+            const gx = (cx - minX) * chunkSize + x;
+            const gy = (cy - minY) * chunkSize + y;
+            if (gy < height && gx < width) {
+              grid[gy][gx] = value;
+            }
+          }
+        }
+      }
+
+      return {
+        tileSize: data.tileSize || TILE,
+        width,
+        height,
+        grid,
+      };
     }
 
     return data;

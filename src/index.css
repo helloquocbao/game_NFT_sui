@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+
 /* Custom wallet button styling */
 .wallet-connect-btn button {
   background-color: #f97316 !important;

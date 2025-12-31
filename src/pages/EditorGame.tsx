@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
@@ -14,8 +14,8 @@ import { useNavigate } from "react-router-dom";
  */
 
 const TILE_SIZE = 32;
-const MAP_W = 20;
-const MAP_H = 12;
+const CHUNK_SIZE = 8;
+const DEFAULT_FLOOR = 5;
 
 const TILE_COLORS: Record<number, string> = {
   0: "#000",
@@ -28,20 +28,29 @@ const TILE_COLORS: Record<number, string> = {
   8: "#90a4ae",
 };
 
+type Direction = "left" | "right" | "top" | "bottom";
+
 export default function EditorGame() {
   const navigate = useNavigate();
-
   const [selectedTile, setSelectedTile] = useState<number>(1);
-
-  const [grid, setGrid] = useState<number[][]>(
-    Array(MAP_H)
-      .fill(0)
-      .map(() => Array(MAP_W).fill(0))
-  );
+  const [grid, setGrid] = useState<number[][]>(() => createDefaultGrid());
 
   useEffect(() => {
     loadMap();
   }, []);
+
+  /* ================= MAP IO ================= */
+
+  function saveMap() {
+    const data = {
+      tileSize: TILE_SIZE,
+      width: grid[0].length,
+      height: grid.length,
+      grid,
+    };
+    localStorage.setItem("CUSTOM_MAP", JSON.stringify(data));
+    alert("✅ Map saved!");
+  }
 
   function loadMap() {
     const raw = localStorage.getItem("CUSTOM_MAP");
@@ -49,130 +58,78 @@ export default function EditorGame() {
 
     try {
       const data = JSON.parse(raw);
-
-      // Xử lý format cũ (tiles object)
-      if (data.tiles && !data.grid) {
-        const width = data.width || MAP_W;
-        const height = data.height || MAP_H;
-        const newGrid = Array(MAP_H)
-          .fill(0)
-          .map(() => Array(MAP_W).fill(0));
-
-        for (const [key, value] of Object.entries(data.tiles)) {
-          const [x, y] = key.split(",").map(Number);
-          if (y < MAP_H && x < MAP_W) {
-            newGrid[y][x] = value as number;
-          }
-        }
-
-        setGrid(newGrid);
-      }
-      // Format mới (grid array)
-      else if (data.grid) {
-        setGrid(data.grid);
-      }
+      if (data.grid) setGrid(data.grid);
     } catch (e) {
-      console.error("Failed to load map:", e);
+      console.error(e);
     }
   }
 
   function clearMap() {
     if (confirm("Xóa toàn bộ map?")) {
-      setGrid(
-        Array(MAP_H)
-          .fill(0)
-          .map(() => Array(MAP_W).fill(0))
-      );
+      setGrid(createDefaultGrid());
     }
   }
 
+  /* ================= EDIT ================= */
+
   function paint(x: number, y: number) {
-    const copy = grid.map((row) => [...row]);
-    copy[y][x] = selectedTile;
-    setGrid(copy);
+    setGrid((prev) => {
+      const copy = prev.map((r) => [...r]);
+      copy[y][x] = selectedTile;
+      return copy;
+    });
   }
 
-  function saveMap() {
-    const data = {
-      tileSize: TILE_SIZE,
-      width: MAP_W,
-      height: MAP_H,
-      grid,
-    };
+  /* ================= CHUNK LOGIC ================= */
 
-    localStorage.setItem("CUSTOM_MAP", JSON.stringify(data));
-    alert("✅ Map saved!");
+  function addSingleChunk(dir: Direction) {
+    setGrid((prev) => {
+      const candidates = findAttachCandidates(prev, dir);
+      if (candidates.length === 0) return prev;
+
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+      const chunk = createChunk(DEFAULT_FLOOR);
+      return mergeChunk(prev, chunk, chosen.x, chosen.y);
+    });
   }
+
+  const gridWidth = grid[0].length;
+
+  /* ================= UI ================= */
 
   return (
-    <div style={{ padding: 20, color: "#fff" }}>
-      <h2>🗺️ MAP EDITOR</h2>
+    <div style={{ padding: 20 }}>
+      <h2>🗺️ MAP EDITOR – Single 8×8 Chunk</h2>
 
-      {/* TOOLBAR */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-        <TileButton
-          label="Empty"
-          color={TILE_COLORS[0]}
-          active={selectedTile === 0}
-          onClick={() => setSelectedTile(0)}
-        />
-        <TileButton
-          label="Wall"
-          color={TILE_COLORS[1]}
-          active={selectedTile === 1}
-          onClick={() => setSelectedTile(1)}
-        />
-        <TileButton
-          label="Trap"
-          color={TILE_COLORS[2]}
-          active={selectedTile === 2}
-          onClick={() => setSelectedTile(2)}
-        />
-        <TileButton
-          label="Floor 1"
-          color={TILE_COLORS[5]}
-          active={selectedTile === 5}
-          onClick={() => setSelectedTile(5)}
-        />
-        <TileButton
-          label="Floor 2"
-          color={TILE_COLORS[6]}
-          active={selectedTile === 6}
-          onClick={() => setSelectedTile(6)}
-        />
-        <TileButton
-          label="Floor 3"
-          color={TILE_COLORS[7]}
-          active={selectedTile === 7}
-          onClick={() => setSelectedTile(7)}
-        />
-        <TileButton
-          label="Floor 4"
-          color={TILE_COLORS[8]}
-          active={selectedTile === 8}
-          onClick={() => setSelectedTile(8)}
-        />
-        <TileButton
-          label="Trap"
-          color={TILE_COLORS[2]}
-          active={selectedTile === 2}
-          onClick={() => setSelectedTile(2)}
-        />
-        <TileButton
-          label="Enemy"
-          color={TILE_COLORS[4]}
-          active={selectedTile === 4}
-          onClick={() => setSelectedTile(4)}
-        />
+      {/* TILE TOOLBAR */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {Object.entries(TILE_COLORS).map(([id, color]) => (
+          <TileButton
+            key={id}
+            label={id}
+            color={color}
+            active={selectedTile === Number(id)}
+            onClick={() => setSelectedTile(Number(id))}
+          />
+        ))}
+      </div>
+
+      {/* CHUNK BUTTONS */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button onClick={() => addSingleChunk("left")}>⬅ Add 8×8</button>
+        <button onClick={() => addSingleChunk("right")}>➡ Add 8×8</button>
+        <button onClick={() => addSingleChunk("top")}>⬆ Add 8×8</button>
+        <button onClick={() => addSingleChunk("bottom")}>⬇ Add 8×8</button>
       </div>
 
       {/* GRID */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${MAP_W}, ${TILE_SIZE}px)`,
+          gridTemplateColumns: `repeat(${gridWidth}, ${TILE_SIZE}px)`,
           border: "2px solid #555",
-          width: MAP_W * TILE_SIZE,
+          width: gridWidth * TILE_SIZE,
         }}
       >
         {grid.map((row, y) =>
@@ -192,7 +149,7 @@ export default function EditorGame() {
         )}
       </div>
 
-      {/* ACTIONS */}
+      {/* ACTION */}
       <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
         <button onClick={saveMap}>💾 Save</button>
         <button onClick={loadMap}>📂 Load</button>
@@ -202,6 +159,129 @@ export default function EditorGame() {
     </div>
   );
 }
+
+/* ================= HELPERS ================= */
+
+function isChunkSolid(grid: number[][], startX: number, startY: number) {
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      if (grid[startY + y]?.[startX + x] >= 5) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isChunkEmpty(grid: number[][], startX: number, startY: number) {
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      const gy = startY + y;
+      const gx = startX + x;
+
+      // ngoài map → coi như empty (sẽ pad)
+      if (gy < 0 || gy >= grid.length || gx < 0 || gx >= grid[0].length) {
+        continue;
+      }
+
+      if (grid[gy][gx] !== 0) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function findAttachCandidates(grid: number[][], dir: Direction) {
+  const width = grid[0].length;
+  const height = grid.length;
+  const candidates: { x: number; y: number }[] = [];
+
+  for (let y = 0; y <= height - CHUNK_SIZE; y += CHUNK_SIZE) {
+    for (let x = 0; x <= width - CHUNK_SIZE; x += CHUNK_SIZE) {
+      if (!isChunkSolid(grid, x, y)) continue;
+
+      let nx = x;
+      let ny = y;
+
+      if (dir === "top") ny = y - CHUNK_SIZE;
+      if (dir === "bottom") ny = y + CHUNK_SIZE;
+      if (dir === "left") nx = x - CHUNK_SIZE;
+      if (dir === "right") nx = x + CHUNK_SIZE;
+
+      if (isChunkEmpty(grid, nx, ny)) {
+        candidates.push({ x: nx, y: ny });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function createDefaultGrid() {
+  return Array(CHUNK_SIZE)
+    .fill(0)
+    .map(() => Array(CHUNK_SIZE).fill(DEFAULT_FLOOR));
+}
+
+function createChunk(tile: number) {
+  const chunk = Array(CHUNK_SIZE)
+    .fill(0)
+    .map(() => Array(CHUNK_SIZE).fill(tile));
+
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      const isEdge =
+        x === 0 || y === 0 || x === CHUNK_SIZE - 1 || y === CHUNK_SIZE - 1;
+
+      if (isEdge && Math.random() < 0.35) {
+        chunk[y][x] = 0; // carve
+      }
+    }
+  }
+
+  return chunk;
+}
+
+function mergeChunk(
+  grid: number[][],
+  chunk: number[][],
+  startX: number,
+  startY: number
+) {
+  const width = grid[0].length;
+  const height = grid.length;
+
+  const leftPad = Math.max(0, -startX);
+  const topPad = Math.max(0, -startY);
+  const rightPad = Math.max(0, startX + CHUNK_SIZE - width);
+  const bottomPad = Math.max(0, startY + CHUNK_SIZE - height);
+
+  const newGrid = Array(height + topPad + bottomPad)
+    .fill(0)
+    .map(() => Array(width + leftPad + rightPad).fill(0));
+
+  // copy old grid
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      newGrid[y + topPad][x + leftPad] = grid[y][x];
+    }
+  }
+
+  const ox = startX + leftPad;
+  const oy = startY + topPad;
+
+  // paste chunk
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      newGrid[oy + y][ox + x] = chunk[y][x];
+    }
+  }
+
+  return newGrid;
+}
+
+/* ================= TILE BUTTON ================= */
 
 function TileButton({
   label,
@@ -218,7 +298,7 @@ function TileButton({
     <button
       onClick={onClick}
       style={{
-        padding: "6px 12px",
+        padding: "6px 10px",
         border: active ? "2px solid #fff" : "2px solid transparent",
         background: color,
         color: "#000",

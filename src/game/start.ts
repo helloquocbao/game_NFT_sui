@@ -21,44 +21,32 @@ export function startGame() {
 
   loadSprite("player-idle", "/sprites/player/Idle.png", {
     sliceX: 4,
-    anims: { idle: { from: 0, to: 3, speed: 6, loop: true } },
+    anims: {
+      idle: { from: 0, to: 3, speed: 6, loop: true },
+    },
   });
 
   loadSprite("player-run", "/sprites/player/Run.png", {
     sliceX: 6,
-    anims: { run: { from: 0, to: 5, speed: 10, loop: true } },
+    anims: {
+      run: { from: 0, to: 5, speed: 10, loop: true },
+    },
   });
 
   loadSprite("player-attack", "/sprites/player/Attack.png", {
     sliceX: 6,
-    anims: { attack: { from: 0, to: 5, speed: 10, loop: true } },
+    anims: {
+      attack: { from: 0, to: 5, speed: 12 },
+    },
   });
 
-  /* ================= MAP LOAD ================= */
+  /* ================= MAP ================= */
 
-  function loadMapFromStorage() {
+  function loadMap() {
     const raw = localStorage.getItem("CUSTOM_MAP");
     if (!raw) return null;
-    const data = JSON.parse(raw);
 
-    if (data.tiles && !data.grid) {
-      const w = data.width || 20;
-      const h = data.height || 12;
-      const grid = Array(h)
-        .fill(0)
-        .map(() => Array(w).fill(0));
-
-      for (const [k, v] of Object.entries(data.tiles)) {
-        const [x, y] = k.split(",").map(Number);
-        if (y < h && x < w) grid[y][x] = v as number;
-      }
-
-      data.grid = grid;
-      data.width = w;
-      data.height = h;
-    }
-
-    return data;
+    return JSON.parse(raw);
   }
 
   function gridToLevel(grid: number[][]) {
@@ -67,106 +55,46 @@ export function startGame() {
         .map((c) => {
           if (c === 1) return "#";
           if (c === 2) return "^";
-          if (c === 5) return "=";
-          if (c === 6) return "~";
-          if (c === 7) return "-";
-          if (c === 8) return "_";
+          if (c >= 5) return "=";
           return ".";
         })
         .join("")
     );
   }
 
-  function findSpawn(grid: number[][], tileSize: number) {
-    const floors: { x: number; y: number }[] = [];
+  function findSpawn(grid: number[][], size: number) {
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] >= 5) floors.push({ x, y });
+        if (grid[y][x] >= 5) {
+          return vec2(x * size + size / 2, y * size + size / 2);
+        }
       }
     }
-    if (floors.length === 0) return vec2(64, 64);
-    const t = choose(floors);
-    return vec2(t.x * tileSize + tileSize / 2, t.y * tileSize + tileSize / 2);
+    return vec2(64, 64);
   }
 
   /* ================= SCENE ================= */
 
   scene("game", () => {
-    const mapData = loadMapFromStorage();
+    const mapData = loadMap();
     if (!mapData?.grid) {
       add([text("NO MAP FOUND"), pos(center()), anchor("center")]);
       return;
     }
 
-    const level = gridToLevel(mapData.grid);
     const spawnPos = findSpawn(mapData.grid, mapData.tileSize);
+    const level = gridToLevel(mapData.grid);
 
     addLevel(level, {
       tileWidth: mapData.tileSize,
       tileHeight: mapData.tileSize,
       tiles: {
-        "#": () => [rect(TILE, TILE), color(120, 120, 120), area(), "wall"],
-        "^": () => [rect(TILE, TILE), color(255, 0, 0), area(), "trap"],
-        "=": () => [rect(TILE, TILE), color(84, 110, 122), "floor"],
-        "~": () => [rect(TILE, TILE), color(96, 125, 139), "floor"],
-        "-": () => [rect(TILE, TILE), color(120, 144, 156), "floor"],
-        _: () => [rect(TILE, TILE), color(144, 164, 174), "floor"],
+        "#": () => [rect(TILE, TILE), area(), color(120, 120, 120), "wall"],
+        "^": () => [rect(TILE, TILE), area(), color(255, 0, 0), "trap"],
+        "=": () => [rect(TILE, TILE), "floor"],
       },
     });
 
-    /* ================= HELPERS ================= */
-
-    function isWalkable(tile: number) {
-      return tile >= 5;
-    }
-
-    function isBlockedTile(tile: number) {
-      return tile === 1 || tile === 2;
-    }
-
-    function isVoidTile(tile: number) {
-      return tile === 0;
-    }
-
-    function getTileAt(pos: Vec2) {
-      const x = Math.floor(pos.x / mapData.tileSize);
-      const y = Math.floor(pos.y / mapData.tileSize);
-      return mapData.grid[y]?.[x] ?? 0;
-    }
-
-    function isOutsideMap(pos: Vec2) {
-      const x = Math.floor(pos.x / mapData.tileSize);
-      const y = Math.floor(pos.y / mapData.tileSize);
-      return x < 0 || y < 0 || x >= mapData.width || y >= mapData.height;
-    }
-
-    const PLAYER_COLLIDER = mapData.tileSize * 0.35;
-
-    function canMoveTo(pos: Vec2) {
-      const r = PLAYER_COLLIDER;
-      const points = [
-        vec2(pos.x - r, pos.y - r),
-        vec2(pos.x + r, pos.y - r),
-        vec2(pos.x - r, pos.y + r),
-        vec2(pos.x + r, pos.y + r),
-      ];
-
-      return points.every((p) => !isBlockedTile(getTileAt(p)));
-    }
-
-    function tryMove(entity: GameObj & { speed: number }, dir: Vec2) {
-      const speed = entity.speed * dt();
-
-      if (dir.x !== 0) {
-        const nextPosX = vec2(entity.pos.x + dir.x * speed, entity.pos.y);
-        if (canMoveTo(nextPosX)) entity.pos.x = nextPosX.x;
-      }
-
-      if (dir.y !== 0) {
-        const nextPosY = vec2(entity.pos.x, entity.pos.y + dir.y * speed);
-        if (canMoveTo(nextPosY)) entity.pos.y = nextPosY.y;
-      }
-    }
     /* ================= PLAYER ================= */
 
     const player = add([
@@ -176,160 +104,102 @@ export function startGame() {
       anchor("center"),
       {
         speed: 200,
-        facing: 1,
-        moving: false,
+        facing: 1, // 1 right, -1 left
         attacking: false,
-        spawnProtection: 0.5,
-        spawnPos,
       },
       "player",
     ]);
 
     onUpdate(() => camPos(player.pos));
 
-    function respawnPlayer() {
-      player.pos = player.spawnPos.clone();
-      player.spawnProtection = 0.5;
-      player.opacity = 1;
+    /* ================= INPUT STATE ================= */
+
+    let moveDir = vec2(0, 0);
+
+    onKeyDown("a", () => {
+      moveDir.x = -1;
+      player.facing = -1;
+    });
+
+    onKeyDown("d", () => {
+      moveDir.x = 1;
+      player.facing = 1;
+    });
+
+    onKeyDown("w", () => (moveDir.y = -1));
+    onKeyDown("s", () => (moveDir.y = 1));
+
+    /* ================= MOVE ================= */
+
+    function canMove(pos: Vec2) {
+      const x = Math.floor(pos.x / mapData.tileSize);
+      const y = Math.floor(pos.y / mapData.tileSize);
+      return mapData.grid[y]?.[x] >= 5;
     }
 
-    function spawnAttackHitbox() {
-      const ATTACK_DISTANCE = 22;
-      const ATTACK_W = 14;
-      const ATTACK_H = 20;
+    /* ================= ATTACK ================= */
 
-      const hitbox = add([
-        pos(player.pos.x + player.facing * ATTACK_DISTANCE, player.pos.y),
-        area({
-          shape: new Rect(vec2(0), ATTACK_W, ATTACK_H),
-        }),
+    function spawnAttackHitbox() {
+      add([
+        pos(player.pos.x + player.facing * 22, player.pos.y),
+        area({ shape: new Rect(vec2(0), 16, 20) }),
         anchor("center"),
         lifespan(0.1),
         "attack",
       ]);
-
-      hitbox.onCollide("enemy", (e) => {
-        e.hp -= 1;
-
-        const knockDir = vec2(player.facing, 0);
-        e.move(knockDir.scale(300));
-
-        if (e.hp <= 0) destroy(e);
-      });
     }
 
     function attack() {
       if (player.attacking) return;
+
       player.attacking = true;
 
       player.use(sprite("player-attack"));
       player.play("attack");
 
-      wait(0.1, () => spawnAttackHitbox());
+      wait(0.1, spawnAttackHitbox);
 
       wait(0.45, () => {
         player.attacking = false;
-
-        if (player.moving) {
-          player.use(sprite("player-run"));
-          player.play("run");
-        } else {
-          player.use(sprite("player-idle"));
-          player.play("idle");
-        }
       });
     }
 
+    onKeyPress("space", attack);
+
+    /* ================= UPDATE LOOP ================= */
+
     player.onUpdate(() => {
-      if (isVoidTile(getTileAt(player.pos)) && player.spawnProtection <= 0) {
-        player.opacity = 0.3;
-        wait(0.25, respawnPlayer);
+      /* ---- MOVE ---- */
+      if (!player.attacking && moveDir.len() > 0) {
+        const next = player.pos.add(moveDir.unit().scale(player.speed * dt()));
+        if (canMove(next)) player.pos = next;
+      }
+
+      /* ---- FLIP (1 nơi duy nhất) ---- */
+      player.flipX = player.facing === -1;
+
+      /* ---- ANIMATION FSM ---- */
+      if (player.attacking) {
+        moveDir = vec2(0, 0);
         return;
       }
 
-      if (player.spawnProtection > 0) {
-        player.spawnProtection -= dt();
-      }
-
-      player.moving = false;
-    });
-
-    onKeyDown("a", () => {
-      tryMove(player, vec2(-1, 0));
-      player.facing = -1;
-      player.moving = true;
-      player.flipX = true;
-    });
-
-    onKeyDown("d", () => {
-      tryMove(player, vec2(1, 0));
-      player.facing = 1;
-      player.moving = true;
-      player.flipX = false;
-    });
-
-    onKeyDown("w", () => tryMove(player, vec2(0, -1)));
-    onKeyDown("s", () => tryMove(player, vec2(0, 1)));
-    onKeyPress("space", attack);
-
-    /* ================= ENEMY ================= */
-
-    function spawnEnemy(x: number, y: number) {
-      const enemy = add([
-        rect(24, 24),
-        pos(x, y),
-        color(255, 80, 80),
-        area(),
-        anchor("center"),
-        {
-          speed: 80,
-          dir: vec2(0, 0),
-          timer: 0,
-        },
-        "enemy",
-      ]);
-
-      enemy.onUpdate(() => {
-        if (isOutsideMap(enemy.pos)) {
-          destroy(enemy);
-          return;
+      if (moveDir.len() > 0) {
+        if (player.curAnim() !== "run") {
+          player.use(sprite("player-run"));
+          player.play("run");
         }
-
-        enemy.timer -= dt();
-        if (enemy.timer <= 0) {
-          enemy.timer = rand(1, 2);
-          enemy.dir = choose([
-            vec2(1, 0),
-            vec2(-1, 0),
-            vec2(0, 1),
-            vec2(0, -1),
-          ]);
-        }
-
-        const next = enemy.pos.add(enemy.dir.scale(enemy.speed * dt()));
-        if (isWalkable(getTileAt(next))) {
-          enemy.move(enemy.dir.scale(enemy.speed * dt()));
-        } else {
-          enemy.timer = 0;
-        }
-      });
-    }
-
-    for (let y = 0; y < mapData.grid.length; y++) {
-      for (let x = 0; x < mapData.grid[y].length; x++) {
-        if (mapData.grid[y][x] === 4) {
-          spawnEnemy(
-            x * mapData.tileSize + mapData.tileSize / 2,
-            y * mapData.tileSize + mapData.tileSize / 2
-          );
+      } else {
+        if (player.curAnim() !== "idle") {
+          player.use(sprite("player-idle"));
+          player.play("idle");
         }
       }
-    }
+
+      /* ---- RESET INPUT ---- */
+      moveDir = vec2(0, 0);
+    });
   });
 
   go("game");
 }
-
-
-
-

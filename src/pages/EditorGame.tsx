@@ -82,13 +82,24 @@ export default function EditorGame() {
 
   /* ================= CHUNK LOGIC ================= */
 
-  function addSingleChunk(dir: Direction) {
+  function addRandomChunk() {
     setGrid((prev) => {
-      const candidates = findAttachCandidates(prev, dir);
+      const directions: Direction[] = ["left", "right", "top", "bottom"];
+      const candidates: { x: number; y: number }[] = [];
+      const seen = new Set<string>();
+
+      for (const dir of directions) {
+        for (const candidate of findAttachCandidates(prev, dir)) {
+          const key = `${candidate.x},${candidate.y}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          candidates.push(candidate);
+        }
+      }
+
       if (candidates.length === 0) return prev;
 
       const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-
       const chunk = createChunk(DEFAULT_FLOOR);
       return mergeChunk(prev, chunk, chosen.x, chosen.y);
     });
@@ -117,10 +128,7 @@ export default function EditorGame() {
 
       {/* CHUNK BUTTONS */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={() => addSingleChunk("left")}>⬅ Add 8×8</button>
-        <button onClick={() => addSingleChunk("right")}>➡ Add 8×8</button>
-        <button onClick={() => addSingleChunk("top")}>⬆ Add 8×8</button>
-        <button onClick={() => addSingleChunk("bottom")}>⬇ Add 8×8</button>
+        <button onClick={addRandomChunk}>Random Add 8x8</button>
       </div>
 
       {/* GRID */}

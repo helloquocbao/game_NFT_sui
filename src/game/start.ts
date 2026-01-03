@@ -120,6 +120,14 @@ export function startGame() {
       return tile >= 5;
     }
 
+    function isBlockedTile(tile: number) {
+      return tile === 1 || tile === 2;
+    }
+
+    function isVoidTile(tile: number) {
+      return tile === 0;
+    }
+
     function getTileAt(pos: Vec2) {
       const x = Math.floor(pos.x / mapData.tileSize);
       const y = Math.floor(pos.y / mapData.tileSize);
@@ -132,18 +140,33 @@ export function startGame() {
       return x < 0 || y < 0 || x >= mapData.width || y >= mapData.height;
     }
 
-    function tryMove(entity, dir: Vec2) {
-      const currentTile = getTileAt(entity.pos);
-      const nextPos = entity.pos.add(dir.scale(entity.speed * dt()));
-      const nextTile = getTileAt(nextPos);
+    const PLAYER_COLLIDER = mapData.tileSize * 0.35;
 
-      // CHỈ CHẶN WALL / TRAP
-      if (nextTile === 1 || nextTile === 2) return;
+    function canMoveTo(pos: Vec2) {
+      const r = PLAYER_COLLIDER;
+      const points = [
+        vec2(pos.x - r, pos.y - r),
+        vec2(pos.x + r, pos.y - r),
+        vec2(pos.x - r, pos.y + r),
+        vec2(pos.x + r, pos.y + r),
+      ];
 
-      // cho phép đi kể cả ra ngoài map (để rơi)
-      entity.move(dir.scale(entity.speed));
+      return points.every((p) => !isBlockedTile(getTileAt(p)));
     }
 
+    function tryMove(entity: GameObj & { speed: number }, dir: Vec2) {
+      const speed = entity.speed * dt();
+
+      if (dir.x !== 0) {
+        const nextPosX = vec2(entity.pos.x + dir.x * speed, entity.pos.y);
+        if (canMoveTo(nextPosX)) entity.pos.x = nextPosX.x;
+      }
+
+      if (dir.y !== 0) {
+        const nextPosY = vec2(entity.pos.x, entity.pos.y + dir.y * speed);
+        if (canMoveTo(nextPosY)) entity.pos.y = nextPosY.y;
+      }
+    }
     /* ================= PLAYER ================= */
 
     const player = add([
@@ -218,7 +241,7 @@ export function startGame() {
     }
 
     player.onUpdate(() => {
-      if (isOutsideMap(player.pos) && player.spawnProtection <= 0) {
+      if (isVoidTile(getTileAt(player.pos)) && player.spawnProtection <= 0) {
         player.opacity = 0.3;
         wait(0.25, respawnPlayer);
         return;
@@ -306,3 +329,7 @@ export function startGame() {
 
   go("game");
 }
+
+
+
+

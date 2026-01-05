@@ -16,6 +16,8 @@ import { useNavigate } from "react-router-dom";
 const TILE_SIZE = 32;
 const CHUNK_SIZE = 8;
 const DEFAULT_FLOOR = 5;
+const MAP_KEY = "CUSTOM_MAP";
+const USER_ID_KEY = "EDITOR_USER_ID";
 
 const TILE_COLORS: Record<number, string> = {
   0: "#000",
@@ -29,11 +31,18 @@ const TILE_COLORS: Record<number, string> = {
 };
 
 type Direction = "left" | "right" | "top" | "bottom";
+type ChunkOwners = Record<string, string>;
 
 export default function EditorGame() {
   const navigate = useNavigate();
+  const initialUserId = getOrCreateUserId();
+  const [userId, setUserId] = useState(initialUserId);
+  const [notice, setNotice] = useState<string>("");
   const [selectedTile, setSelectedTile] = useState<number>(1);
   const [grid, setGrid] = useState<number[][]>(() => createDefaultGrid());
+  const [chunkOwners, setChunkOwners] = useState<ChunkOwners>(() =>
+    createOwnersForGrid(createDefaultGrid(), initialUserId)
+  );
 
   useEffect(() => {
     loadMap();
@@ -47,18 +56,24 @@ export default function EditorGame() {
       width: grid[0].length,
       height: grid.length,
       grid,
+      chunkOwners,
     };
-    localStorage.setItem("CUSTOM_MAP", JSON.stringify(data));
+    localStorage.setItem(MAP_KEY, JSON.stringify(data));
     alert("✅ Map saved!");
   }
 
   function loadMap() {
-    const raw = localStorage.getItem("CUSTOM_MAP");
+    const raw = localStorage.getItem(MAP_KEY);
     if (!raw) return;
 
     try {
       const data = JSON.parse(raw);
-      if (data.grid) setGrid(data.grid);
+      if (data.grid) {
+        setGrid(data.grid);
+        const owners =
+          data.chunkOwners ?? createOwnersForGrid(data.grid, userId);
+        setChunkOwners(owners);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -66,13 +81,22 @@ export default function EditorGame() {
 
   function clearMap() {
     if (confirm("Xóa toàn bộ map?")) {
-      setGrid(createDefaultGrid());
+      const freshGrid = createDefaultGrid();
+      setGrid(freshGrid);
+      setChunkOwners(createOwnersForGrid(freshGrid, userId));
+      setNotice("");
     }
   }
 
   /* ================= EDIT ================= */
 
   function paint(x: number, y: number) {
+    const owner = getChunkOwnerAt(chunkOwners, x, y);
+    if (owner !== userId) {
+      setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
+      return;
+    }
+    setNotice("");
     setGrid((prev) => {
       const copy = prev.map((r) => [...r]);
       copy[y][x] = selectedTile;
@@ -83,26 +107,45 @@ export default function EditorGame() {
   /* ================= CHUNK LOGIC ================= */
 
   function addRandomChunk() {
-    setGrid((prev) => {
-      const directions: Direction[] = ["left", "right", "top", "bottom"];
-      const candidates: { x: number; y: number }[] = [];
-      const seen = new Set<string>();
+    const directions: Direction[] = ["left", "right", "top", "bottom"];
+    const candidates: { x: number; y: number }[] = [];
+    const seen = new Set<string>();
 
-      for (const dir of directions) {
-        for (const candidate of findAttachCandidates(prev, dir)) {
-          const key = `${candidate.x},${candidate.y}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          candidates.push(candidate);
-        }
+    for (const dir of directions) {
+      for (const candidate of findAttachCandidates(grid, dir)) {
+        const key = `${candidate.x},${candidate.y}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(candidate);
       }
+    }
 
-      if (candidates.length === 0) return prev;
+    if (candidates.length === 0) {
+      setNotice("No attachable chunk found.");
+      return;
+    }
 
-      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-      const chunk = createChunk(DEFAULT_FLOOR);
-      return mergeChunk(prev, chunk, chosen.x, chosen.y);
-    });
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const chunk = createChunk(DEFAULT_FLOOR);
+    const result = mergeChunk(
+      grid,
+      chunkOwners,
+      chunk,
+      chosen.x,
+      chosen.y,
+      userId
+    );
+    setGrid(result.grid);
+    setChunkOwners(result.owners);
+    setNotice("");
+  }
+
+  function changeUser() {
+    const next = prompt("Set user id", userId)?.trim();
+    if (!next) return;
+    setUserId(next);
+    localStorage.setItem(USER_ID_KEY, next);
+    setNotice(`User set to ${next}.`);
   }
 
   const gridWidth = grid[0].length;
@@ -112,6 +155,20 @@ export default function EditorGame() {
   return (
     <div style={{ padding: 20 }}>
       <h2>🗺️ MAP EDITOR – Single 8×8 Chunk</h2>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginBottom: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <div>User: {userId}</div>
+        <button onClick={changeUser}>Switch User</button>
+        {notice && <div style={{ color: "#ffcc80" }}>{notice}</div>}
+      </div>
 
       {/* TILE TOOLBAR */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -141,19 +198,26 @@ export default function EditorGame() {
         }}
       >
         {grid.map((row, y) =>
-          row.map((cell, x) => (
-            <div
-              key={`${x}-${y}`}
-              onClick={() => paint(x, y)}
-              style={{
-                width: TILE_SIZE,
-                height: TILE_SIZE,
-                background: TILE_COLORS[cell],
-                border: "1px solid #333",
-                cursor: "pointer",
-              }}
-            />
-          ))
+          row.map((cell, x) => {
+            const chunkKey = getChunkKeyFromTile(x, y);
+            const owner = chunkOwners[chunkKey];
+            const canEdit = owner === userId;
+
+            return (
+              <div
+                key={`${x}-${y}`}
+                onClick={() => paint(x, y)}
+                title={`Owner: ${owner ?? "none"}`}
+                style={{
+                  width: TILE_SIZE,
+                  height: TILE_SIZE,
+                  background: TILE_COLORS[cell],
+                  border: "1px solid #333",
+                  cursor: canEdit ? "pointer" : "not-allowed",
+                }}
+              />
+            );
+          })
         )}
       </div>
 
@@ -169,6 +233,57 @@ export default function EditorGame() {
 }
 
 /* ================= HELPERS ================= */
+
+function getOrCreateUserId() {
+  const stored = localStorage.getItem(USER_ID_KEY);
+  if (stored) return stored;
+  const generated = `user_${Math.random().toString(36).slice(2, 8)}`;
+  localStorage.setItem(USER_ID_KEY, generated);
+  return generated;
+}
+
+function makeChunkKey(cx: number, cy: number) {
+  return `${cx},${cy}`;
+}
+
+function getChunkKeyFromTile(x: number, y: number) {
+  const cx = Math.floor(x / CHUNK_SIZE);
+  const cy = Math.floor(y / CHUNK_SIZE);
+  return makeChunkKey(cx, cy);
+}
+
+function getChunkOwnerAt(owners: ChunkOwners, x: number, y: number) {
+  return owners[getChunkKeyFromTile(x, y)];
+}
+
+function createOwnersForGrid(grid: number[][], ownerId: string): ChunkOwners {
+  const owners: ChunkOwners = {};
+  if (grid.length === 0 || grid[0].length === 0) return owners;
+
+  const cols = Math.ceil(grid[0].length / CHUNK_SIZE);
+  const rows = Math.ceil(grid.length / CHUNK_SIZE);
+
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      owners[makeChunkKey(cx, cy)] = ownerId;
+    }
+  }
+
+  return owners;
+}
+
+function shiftChunkOwners(
+  owners: ChunkOwners,
+  shiftX: number,
+  shiftY: number
+) {
+  const shifted: ChunkOwners = {};
+  for (const [key, owner] of Object.entries(owners)) {
+    const [cx, cy] = key.split(",").map(Number);
+    shifted[makeChunkKey(cx + shiftX, cy + shiftY)] = owner;
+  }
+  return shifted;
+}
 
 function isChunkSolid(grid: number[][], startX: number, startY: number) {
   for (let y = 0; y < CHUNK_SIZE; y++) {
@@ -253,9 +368,11 @@ function createChunk(tile: number) {
 
 function mergeChunk(
   grid: number[][],
+  owners: ChunkOwners,
   chunk: number[][],
   startX: number,
-  startY: number
+  startY: number,
+  ownerId: string
 ) {
   const width = grid[0].length;
   const height = grid.length;
@@ -276,6 +393,10 @@ function mergeChunk(
     }
   }
 
+  const shiftX = Math.round(leftPad / CHUNK_SIZE);
+  const shiftY = Math.round(topPad / CHUNK_SIZE);
+  const shiftedOwners = shiftChunkOwners(owners, shiftX, shiftY);
+
   const ox = startX + leftPad;
   const oy = startY + topPad;
 
@@ -286,7 +407,13 @@ function mergeChunk(
     }
   }
 
-  return newGrid;
+  const chunkKey = makeChunkKey(
+    Math.round(ox / CHUNK_SIZE),
+    Math.round(oy / CHUNK_SIZE)
+  );
+  shiftedOwners[chunkKey] = ownerId;
+
+  return { grid: newGrid, owners: shiftedOwners };
 }
 
 /* ================= TILE BUTTON ================= */

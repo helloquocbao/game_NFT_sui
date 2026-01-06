@@ -10,16 +10,16 @@ import "./LandingPage.css";
 
 const features = [
   {
-    title: "Claim chunks",
-    description: "Mint 8x8 tiles as NFTs and grow the world edge by edge.",
+    title: "Stone chunks",
+    description: "Mint 8x8 rock tiles as NFTs and attach new floating islands.",
   },
   {
-    title: "Edit live",
-    description: "Update tiles and images on-chain without leaving the editor.",
+    title: "Carve and paint",
+    description: "Edit tiles live, set images, and keep ownership on-chain.",
   },
   {
-    title: "Play instantly",
-    description: "Launch the game straight from your saved map layout.",
+    title: "Play together",
+    description: "Jump into the game and explore the skyworld as it grows.",
   },
 ];
 
@@ -40,9 +40,12 @@ export default function LandingPage() {
   return (
     <div className="landing">
       <div className="landing__bg">
-        <span className="landing__blob landing__blob--a" />
-        <span className="landing__blob landing__blob--b" />
-        <span className="landing__grid" />
+        <span className="landing__sky" />
+        <span className="landing__sun" />
+        <span className="landing__cloud landing__cloud--a" />
+        <span className="landing__cloud landing__cloud--b" />
+        <span className="landing__cloud landing__cloud--c" />
+        <span className="landing__mist" />
       </div>
 
       <div className="landing__content">
@@ -73,17 +76,17 @@ export default function LandingPage() {
               style={{ "--delay": "0.08s" }}
             >
               <span className="badge__dot" />
-              <span>On-chain chunks, owned by players</span>
+              <span>Cloud-born chunks, owned by players</span>
             </div>
 
             <h1 className="hero__title landing__reveal" style={{ "--delay": "0.12s" }}>
-              Build a world one <span className="hero__accent">8x8</span> chunk
-              at a time.
+              Build a skyworld, one{" "}
+              <span className="hero__accent">stone chunk</span> at a time.
             </h1>
 
             <p className="hero__subtitle landing__reveal" style={{ "--delay": "0.16s" }}>
-              Claim, paint, and trade map chunks as NFTs. Every tile update lands
-              on Sui and appears instantly in the game loop.
+              Claim rocky chunks, carve tiles, and trade them as NFTs. Every
+              update lands on Sui and appears instantly in the game loop.
             </p>
 
             <div className="hero__cta landing__reveal" style={{ "--delay": "0.2s" }}>
@@ -112,14 +115,20 @@ export default function LandingPage() {
           <div className="hero__panel landing__reveal" style={{ "--delay": "0.18s" }}>
             <div className="panel__header">
               <div>
-                <div className="panel__eyebrow">Live chain</div>
-                <div className="panel__title">Chunk World Testnet</div>
+                <div className="panel__eyebrow">Sky chain</div>
+                <div className="panel__title">Floating World Testnet</div>
               </div>
               <div className="panel__tag">Sui</div>
             </div>
 
             <div className="panel__preview">
-              <div className="panel__preview-inner" />
+              <span className="preview__cloud preview__cloud--a" />
+              <span className="preview__cloud preview__cloud--b" />
+              <div className="preview__chunk">
+                <div className="preview__chunk-top" />
+                <div className="preview__chunk-face" />
+              </div>
+              <div className="preview__chunk-shadow" />
             </div>
 
             <div className="panel__stats">

@@ -428,10 +428,10 @@ export default function EditorGame() {
       <div className="editor-shell">
         <header className="editor-header">
           <div>
-            <div className="editor-eyebrow">Chunk World</div>
-            <h1 className="editor-title">Map editor</h1>
+            <div className="editor-eyebrow">Skyworld editor</div>
+            <h1 className="editor-title">Stone chunk workshop</h1>
             <p className="editor-subtitle">
-              Local grid editing with on-chain actions.
+              Carve floating chunks and push updates on-chain.
             </p>
           </div>
 
@@ -451,8 +451,8 @@ export default function EditorGame() {
             <div className="panel panel--main">
               <div className="panel__header">
                 <div>
-                  <div className="panel__eyebrow">Local editor</div>
-                  <div className="panel__title">Map grid</div>
+                  <div className="panel__eyebrow">Stone canvas</div>
+                  <div className="panel__title">Chunk grid</div>
                 </div>
                 <div className="panel__meta">
                   <div>
@@ -469,7 +469,7 @@ export default function EditorGame() {
                   Switch user
                 </button>
                 <button className="btn btn--ghost" onClick={addRandomChunk}>
-                  Add random chunk
+                  Add stone chunk
                 </button>
               </div>
 

@@ -61,6 +61,7 @@ export default function EditorGame() {
   const [chunkOwners, setChunkOwners] = useState<ChunkOwners>(() =>
     createOwnersForGrid(createDefaultGrid(), initialUserId)
   );
+  const [activeChunkKey, setActiveChunkKey] = useState<string>("");
   const [worldId, setWorldId] = useState<string>("");
   const [worldOverride, setWorldOverride] = useState<string>("");
   const [chainError, setChainError] = useState<string>("");
@@ -110,6 +111,12 @@ export default function EditorGame() {
   const worldIdValue = worldOverride.trim() || worldId;
   const isConnected = Boolean(account?.address);
   const isBusy = isPending || Boolean(busyAction);
+  const walletAddress = account?.address ?? "";
+  const activeOwnerId = walletAddress || userId;
+  const isOwnerMatch = (owner?: string) =>
+    Boolean(
+      owner && (owner === userId || (walletAddress && owner === walletAddress))
+    );
   const worldListOptions = useMemo(
     () => worldList.filter((id) => id && id !== worldId),
     [worldList, worldId]
@@ -120,6 +127,9 @@ export default function EditorGame() {
     const rows = Math.ceil(gridHeight / CHUNK_SIZE);
     return { cols, rows };
   }, [gridWidth, gridHeight]);
+  const activeChunkLabel = activeChunkKey
+    ? activeChunkKey.replace(",", ", ")
+    : "none";
 
   /* ================= MAP IO ================= */
 
@@ -146,6 +156,7 @@ export default function EditorGame() {
         const owners =
           data.chunkOwners ?? createOwnersForGrid(data.grid, userId);
         setChunkOwners(owners);
+        setActiveChunkKey("");
       }
     } catch (error) {
       console.error(error);
@@ -157,6 +168,7 @@ export default function EditorGame() {
       const freshGrid = createDefaultGrid();
       setGrid(freshGrid);
       setChunkOwners(createOwnersForGrid(freshGrid, userId));
+      setActiveChunkKey("");
       setNotice("");
     }
   }
@@ -165,9 +177,17 @@ export default function EditorGame() {
 
   function paint(x: number, y: number) {
     if (blockClickRef.current) return;
-    const owner = getChunkOwnerAt(chunkOwners, x, y);
-    if (owner !== userId) {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    const chunkKey = makeChunkKey(cx, cy);
+    const owner = chunkOwners[chunkKey];
+    if (!isOwnerMatch(owner)) {
       setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
+      return;
+    }
+    if (!activeChunkKey || activeChunkKey !== chunkKey) {
+      setActiveChunkKey(chunkKey);
+      setNotice(`Selected chunk (${cx}, ${cy}).`);
       return;
     }
     setNotice("");
@@ -264,7 +284,7 @@ export default function EditorGame() {
       chunk,
       chosen.x,
       chosen.y,
-      userId
+      activeOwnerId
     );
     setGrid(result.grid);
     setChunkOwners(result.owners);
@@ -276,6 +296,7 @@ export default function EditorGame() {
     if (!next) return;
     setUserId(next);
     localStorage.setItem(USER_ID_KEY, next);
+    setActiveChunkKey("");
     setNotice(`User set to ${next}.`);
   }
 
@@ -344,6 +365,7 @@ export default function EditorGame() {
     setMapLoadError("");
     setIsMapLoading(true);
     setLoadedChunks(null);
+    setActiveChunkKey("");
 
     try {
       const fieldEntries = await fetchAllDynamicFields(targetWorldId);
@@ -576,7 +598,7 @@ export default function EditorGame() {
       for (let cxIndex = 0; cxIndex < nextCols; cxIndex++) {
         const key = makeChunkKey(cxIndex, cyIndex);
         if (!nextOwners[key]) {
-          nextOwners[key] = userId;
+          nextOwners[key] = activeOwnerId;
         }
       }
     }
@@ -734,13 +756,14 @@ export default function EditorGame() {
                   <div className="panel__eyebrow">Stone canvas</div>
                   <div className="panel__title">Chunk grid</div>
                 </div>
-                <div className="panel__meta">
-                  <div>
-                    Size: {gridWidth} x {gridHeight}
-                  </div>
-                  <div>User: {userId}</div>
+              <div className="panel__meta">
+                <div>
+                  Size: {gridWidth} x {gridHeight}
                 </div>
+                <div>User: {userId}</div>
+                <div>Editing: {activeChunkLabel}</div>
               </div>
+            </div>
 
               {notice && <div className="panel__notice">{notice}</div>}
 
@@ -785,18 +808,25 @@ export default function EditorGame() {
                 >
                   {grid.map((row, y) =>
                     row.map((cell, x) => {
-                      const owner = getChunkOwnerAt(chunkOwners, x, y);
-                      const canEdit = owner === userId;
+                      const chunkKey = getChunkKeyFromTile(x, y);
+                      const owner = chunkOwners[chunkKey];
+                      const isOwned = isOwnerMatch(owner);
+                      const isSelected = chunkKey === activeChunkKey;
+                      const isLocked = Boolean(activeChunkKey) && !isSelected;
 
                       return (
                         <button
                           key={`${x}-${y}`}
-                          className="editor-tile"
+                          className={`editor-tile ${
+                            isOwned ? "is-owned" : ""
+                          } ${isSelected ? "is-selected" : ""} ${
+                            isLocked ? "is-locked" : ""
+                          }`}
                           onClick={() => paint(x, y)}
                           title={`Owner: ${owner ?? "none"}`}
                           style={{
                             background: TILE_COLORS[cell],
-                            cursor: canEdit ? "pointer" : "not-allowed",
+                            cursor: isOwned ? "pointer" : "not-allowed",
                           }}
                         />
                       );

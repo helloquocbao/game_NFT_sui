@@ -14,6 +14,7 @@ module chunk_world::world {
     const CHUNK_SIZE: u64 = 8;
     const TILES_LEN: u64 = 64; // 8*8
     const MAX_URL_BYTES: u64 = 2048;
+    const WORLD_ROW_LEN: u64 = 16;
 
     const U32_MAX: u32 = 4294967295;
 
@@ -27,6 +28,7 @@ module chunk_world::world {
     const E_CHUNK_ALREADY_EXISTS: u64 = 5;
     const E_FIRST_CHUNK_MUST_BE_ORIGIN: u64 = 6;
     const E_NO_ADJACENT_CHUNK: u64 = 7;
+    const E_WORLD_FULL: u64 = 8;
 
     /* ================= ADMIN / REGISTRY ================= */
 
@@ -184,14 +186,12 @@ module chunk_world::world {
 
     /* ================= USER: CLAIM / MINT CHUNK NFT ================= */
 
-    /// User claim chunk NFT ở (cx,cy) nếu chưa ai claim.
+    /// User claim chunk NFT. Coordinates are assigned automatically.
     /// Rule:
     /// - Chunk đầu tiên của world bắt buộc (0,0)
     /// - Chunk sau phải kề 1 chunk đã tồn tại (4 hướng)
      entry fun claim_chunk(
         world: &mut WorldMap,
-        cx: u32,
-        cy: u32,
         image_url: String,
         tiles: vector<u8>,
         ctx: &mut TxContext
@@ -200,6 +200,7 @@ module chunk_world::world {
         assert!(vector::length(&tiles) == TILES_LEN, E_INVALID_TILES_LEN);
         assert_tiles_valid(&tiles);
 
+        let (cx, cy) = next_chunk_coords(world.chunk_count);
         let key = ChunkKey { cx, cy };
         assert!(!df::exists_(&world.id, key), E_CHUNK_ALREADY_EXISTS);
 
@@ -273,6 +274,14 @@ module chunk_world::world {
     }
 
     /* ================= INTERNAL HELPERS ================= */
+
+    fun next_chunk_coords(chunk_index: u64): (u32, u32) {
+        let cy64 = chunk_index / WORLD_ROW_LEN;
+        assert!(cy64 <= (U32_MAX as u64), E_WORLD_FULL);
+        let cx = (chunk_index % WORLD_ROW_LEN) as u32;
+        let cy = cy64 as u32;
+        (cx, cy)
+    }
 
     fun has_adjacent(world: &WorldMap, cx: u32, cy: u32): bool {
         let mut ok = false;

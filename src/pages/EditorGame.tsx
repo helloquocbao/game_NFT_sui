@@ -30,6 +30,7 @@ import "./EditorGame.css";
 const TILE_SIZE = 32;
 const CHUNK_SIZE = 8;
 const DEFAULT_FLOOR = 5;
+const WORLD_ROW_LEN = 16;
 const MAP_KEY = "CUSTOM_MAP";
 const USER_ID_KEY = "EDITOR_USER_ID";
 
@@ -75,6 +76,7 @@ export default function EditorGame() {
   const [isMapLoading, setIsMapLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState("");
   const [loadedChunks, setLoadedChunks] = useState<number | null>(null);
+  const [worldChunkCount, setWorldChunkCount] = useState<number | null>(null);
 
   const [chunkCx, setChunkCx] = useState("0");
   const [chunkCy, setChunkCy] = useState("0");
@@ -103,6 +105,9 @@ export default function EditorGame() {
     void (async () => {
       const id = await loadWorldId();
       await loadWorldList(id);
+      if (id) {
+        await loadWorldMeta(id);
+      }
     })();
   }, [WORLD_REGISTRY_ID]);
 
@@ -130,6 +135,15 @@ export default function EditorGame() {
   const activeChunkLabel = activeChunkKey
     ? activeChunkKey.replace(",", ", ")
     : "none";
+  const nextChunkCoords = useMemo(() => {
+    if (worldChunkCount === null) return null;
+    const cx = worldChunkCount % WORLD_ROW_LEN;
+    const cy = Math.floor(worldChunkCount / WORLD_ROW_LEN);
+    return { cx, cy };
+  }, [worldChunkCount]);
+  const nextChunkLabel = nextChunkCoords
+    ? `${nextChunkCoords.cx}, ${nextChunkCoords.cy}`
+    : "unknown";
 
   /* ================= MAP IO ================= */
 
@@ -348,6 +362,36 @@ export default function EditorGame() {
     }
   }
 
+  async function loadWorldMeta(targetWorldId: string) {
+    if (!targetWorldId) {
+      setWorldChunkCount(null);
+      return null;
+    }
+
+    try {
+      const result = await suiClient.getObject({
+        id: targetWorldId,
+        options: { showContent: true },
+      });
+      const content = result.data?.content;
+      if (!content || content.dataType !== "moveObject") {
+        setWorldChunkCount(null);
+        return null;
+      }
+
+      const fields = normalizeMoveFields(content.fields);
+      const count =
+        parseU64Value(fields.chunk_count) ??
+        parseU64Value(fields.chunkCount) ??
+        null;
+      setWorldChunkCount(count);
+      return count;
+    } catch (error) {
+      setWorldChunkCount(null);
+      return null;
+    }
+  }
+
   async function refreshWorldAndMap() {
     setMapLoadError("");
     const override = worldOverride.trim();
@@ -358,6 +402,7 @@ export default function EditorGame() {
       setMapLoadError("World id missing.");
       return;
     }
+    await loadWorldMeta(targetId);
     await loadWorldMap(targetId);
   }
 
@@ -632,9 +677,25 @@ export default function EditorGame() {
       return;
     }
 
-    const cx = parseCoord(chunkCx);
-    const cy = parseCoord(chunkCy);
-    console.log("Claim chunk at", cx, cy);
+    setTxError("");
+    const chunkCount = await loadWorldMeta(worldIdValue);
+    if (chunkCount === null) {
+      setTxError("Unable to read world chunk count.");
+      return;
+    }
+
+    const cx = chunkCount % WORLD_ROW_LEN;
+    const cy = Math.floor(chunkCount / WORLD_ROW_LEN);
+    const nextKey = makeChunkKey(cx, cy);
+
+    if (activeChunkKey !== nextKey) {
+      ensureChunkInGrid(cx, cy);
+      setActiveChunkKey(nextKey);
+      setChunkCx(String(cx));
+      setChunkCy(String(cy));
+      setNotice(`Next claim chunk is (${cx}, ${cy}). Edit it, then claim again.`);
+      return;
+    }
 
     const { grid: workingGrid } = ensureChunkInGrid(cx, cy);
     const tiles = buildChunkTiles(workingGrid, cx, cy);
@@ -647,14 +708,12 @@ export default function EditorGame() {
           target: `${PACKAGE_ID}::world::claim_chunk`,
           arguments: [
             tx.object(worldIdValue),
-            tx.pure.u32(cx),
-            tx.pure.u32(cy),
             tx.pure.string(imageUrl),
             tx.pure.vector("u8", tiles),
           ],
         });
       },
-      () => resolveChunkId()
+      () => refreshWorldAndMap()
     );
   }
 
@@ -950,26 +1009,17 @@ export default function EditorGame() {
             <div className="panel">
               <div className="panel__title">Claim chunk</div>
               <p className="panel__desc">
-                Uses the local chunk tiles for the selected coordinates.
+                Uses tiles from the selected chunk. Coordinates are assigned
+                on-chain.
               </p>
-              <div className="panel__grid">
-                <div className="panel__field">
-                  <label>CX</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={chunkCx}
-                    onChange={(event) => setChunkCx(event.target.value)}
-                  />
+              <div className="panel__rows">
+                <div>
+                  <span>Selected chunk</span>
+                  <span>{activeChunkLabel}</span>
                 </div>
-                <div className="panel__field">
-                  <label>CY</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={chunkCy}
-                    onChange={(event) => setChunkCy(event.target.value)}
-                  />
+                <div>
+                  <span>Next on-chain</span>
+                  <span>{nextChunkLabel}</span>
                 </div>
               </div>
               <div className="panel__field">
@@ -998,6 +1048,26 @@ export default function EditorGame() {
                   onChange={(event) => setChunkObjectId(event.target.value)}
                   placeholder="0x..."
                 />
+              </div>
+              <div className="panel__grid">
+                <div className="panel__field">
+                  <label>CX</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={chunkCx}
+                    onChange={(event) => setChunkCx(event.target.value)}
+                  />
+                </div>
+                <div className="panel__field">
+                  <label>CY</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={chunkCy}
+                    onChange={(event) => setChunkCy(event.target.value)}
+                  />
+                </div>
               </div>
               <div className="panel__actions">
                 <button
@@ -1349,6 +1419,17 @@ function normalizeMoveVector(value: unknown): unknown[] {
 }
 
 function parseU32Value(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+}
+
+function parseU64Value(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.floor(value));
   }

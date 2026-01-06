@@ -30,9 +30,9 @@ import "./EditorGame.css";
 const TILE_SIZE = 32;
 const CHUNK_SIZE = 8;
 const DEFAULT_FLOOR = 5;
-const WORLD_ROW_LEN = 16;
 const MAP_KEY = "CUSTOM_MAP";
 const USER_ID_KEY = "EDITOR_USER_ID";
+const RANDOM_OBJECT_ID = "0x8";
 
 const TILE_COLORS: Record<number, string> = {
   0: "#0b0b0b",
@@ -76,7 +76,6 @@ export default function EditorGame() {
   const [isMapLoading, setIsMapLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState("");
   const [loadedChunks, setLoadedChunks] = useState<number | null>(null);
-  const [worldChunkCount, setWorldChunkCount] = useState<number | null>(null);
 
   const [chunkCx, setChunkCx] = useState("0");
   const [chunkCy, setChunkCy] = useState("0");
@@ -105,9 +104,6 @@ export default function EditorGame() {
     void (async () => {
       const id = await loadWorldId();
       await loadWorldList(id);
-      if (id) {
-        await loadWorldMeta(id);
-      }
     })();
   }, [WORLD_REGISTRY_ID]);
 
@@ -135,15 +131,6 @@ export default function EditorGame() {
   const activeChunkLabel = activeChunkKey
     ? activeChunkKey.replace(",", ", ")
     : "none";
-  const nextChunkCoords = useMemo(() => {
-    if (worldChunkCount === null) return null;
-    const cx = worldChunkCount % WORLD_ROW_LEN;
-    const cy = Math.floor(worldChunkCount / WORLD_ROW_LEN);
-    return { cx, cy };
-  }, [worldChunkCount]);
-  const nextChunkLabel = nextChunkCoords
-    ? `${nextChunkCoords.cx}, ${nextChunkCoords.cy}`
-    : "unknown";
 
   /* ================= MAP IO ================= */
 
@@ -195,13 +182,19 @@ export default function EditorGame() {
     const cy = Math.floor(y / CHUNK_SIZE);
     const chunkKey = makeChunkKey(cx, cy);
     const owner = chunkOwners[chunkKey];
-    if (!isOwnerMatch(owner)) {
-      setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
-      return;
-    }
+    const isOwned = isOwnerMatch(owner);
     if (!activeChunkKey || activeChunkKey !== chunkKey) {
       setActiveChunkKey(chunkKey);
-      setNotice(`Selected chunk (${cx}, ${cy}).`);
+      if (isOwned) {
+        setNotice(`Selected chunk (${cx}, ${cy}).`);
+      } else {
+        const ownerLabel = owner ? shortAddress(owner) : "no owner";
+        setNotice(`Selected chunk (${cx}, ${cy}) (${ownerLabel}).`);
+      }
+      return;
+    }
+    if (!isOwned) {
+      setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
       return;
     }
     setNotice("");
@@ -362,36 +355,6 @@ export default function EditorGame() {
     }
   }
 
-  async function loadWorldMeta(targetWorldId: string) {
-    if (!targetWorldId) {
-      setWorldChunkCount(null);
-      return null;
-    }
-
-    try {
-      const result = await suiClient.getObject({
-        id: targetWorldId,
-        options: { showContent: true },
-      });
-      const content = result.data?.content;
-      if (!content || content.dataType !== "moveObject") {
-        setWorldChunkCount(null);
-        return null;
-      }
-
-      const fields = normalizeMoveFields(content.fields);
-      const count =
-        parseU64Value(fields.chunk_count) ??
-        parseU64Value(fields.chunkCount) ??
-        null;
-      setWorldChunkCount(count);
-      return count;
-    } catch (error) {
-      setWorldChunkCount(null);
-      return null;
-    }
-  }
-
   async function refreshWorldAndMap() {
     setMapLoadError("");
     const override = worldOverride.trim();
@@ -402,7 +365,6 @@ export default function EditorGame() {
       setMapLoadError("World id missing.");
       return;
     }
-    await loadWorldMeta(targetId);
     await loadWorldMap(targetId);
   }
 
@@ -614,45 +576,6 @@ export default function EditorGame() {
     return true;
   }
 
-  function ensureChunkInGrid(cx: number, cy: number) {
-    const width = grid[0]?.length ?? 0;
-    const height = grid.length;
-    const cols = Math.ceil(width / CHUNK_SIZE) || 0;
-    const rows = Math.ceil(height / CHUNK_SIZE) || 0;
-    const nextCols = Math.max(cols, cx + 1);
-    const nextRows = Math.max(rows, cy + 1);
-
-    if (nextCols === cols && nextRows === rows) {
-      return { grid, owners: chunkOwners };
-    }
-
-    const nextWidth = nextCols * CHUNK_SIZE;
-    const nextHeight = nextRows * CHUNK_SIZE;
-    const nextGrid = Array(nextHeight)
-      .fill(0)
-      .map(() => Array(nextWidth).fill(DEFAULT_FLOOR));
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        nextGrid[y][x] = grid[y][x];
-      }
-    }
-
-    const nextOwners = { ...chunkOwners };
-    for (let cyIndex = 0; cyIndex < nextRows; cyIndex++) {
-      for (let cxIndex = 0; cxIndex < nextCols; cxIndex++) {
-        const key = makeChunkKey(cxIndex, cyIndex);
-        if (!nextOwners[key]) {
-          nextOwners[key] = activeOwnerId;
-        }
-      }
-    }
-
-    setGrid(nextGrid);
-    setChunkOwners(nextOwners);
-    return { grid: nextGrid, owners: nextOwners };
-  }
-
   async function createWorldOnChain() {
     if (!WORLD_REGISTRY_ID || !ADMIN_CAP_ID) {
       setTxError("Missing registry or admin cap id.");
@@ -672,33 +595,21 @@ export default function EditorGame() {
   }
 
   async function claimChunkOnChain() {
+    console.log("Claim chunk on chain", worldIdValue, activeChunkKey);
     if (!worldIdValue) {
       setTxError("World id missing.");
       return;
     }
 
-    setTxError("");
-    const chunkCount = await loadWorldMeta(worldIdValue);
-    if (chunkCount === null) {
-      setTxError("Unable to read world chunk count.");
-      return;
-    }
+    // if (!activeChunkKey) {
+    //   setTxError("Select a chunk to use as tile template.");
+    //   return;
+    // }
 
-    const cx = chunkCount % WORLD_ROW_LEN;
-    const cy = Math.floor(chunkCount / WORLD_ROW_LEN);
-    const nextKey = makeChunkKey(cx, cy);
-
-    if (activeChunkKey !== nextKey) {
-      ensureChunkInGrid(cx, cy);
-      setActiveChunkKey(nextKey);
-      setChunkCx(String(cx));
-      setChunkCy(String(cy));
-      setNotice(`Next claim chunk is (${cx}, ${cy}). Edit it, then claim again.`);
-      return;
-    }
-
-    const { grid: workingGrid } = ensureChunkInGrid(cx, cy);
-    const tiles = buildChunkTiles(workingGrid, cx, cy);
+    const [cxRaw, cyRaw] = activeChunkKey.split(",");
+    const cx = parseCoord(cxRaw ?? "0");
+    const cy = parseCoord(cyRaw ?? "0");
+    const tiles = buildChunkTiles(grid, cx, cy);
     const imageUrl = claimImageUrl.trim();
 
     await runTx(
@@ -708,6 +619,7 @@ export default function EditorGame() {
           target: `${PACKAGE_ID}::world::claim_chunk`,
           arguments: [
             tx.object(worldIdValue),
+            tx.object(RANDOM_OBJECT_ID),
             tx.pure.string(imageUrl),
             tx.pure.vector("u8", tiles),
           ],
@@ -815,14 +727,14 @@ export default function EditorGame() {
                   <div className="panel__eyebrow">Stone canvas</div>
                   <div className="panel__title">Chunk grid</div>
                 </div>
-              <div className="panel__meta">
-                <div>
-                  Size: {gridWidth} x {gridHeight}
+                <div className="panel__meta">
+                  <div>
+                    Size: {gridWidth} x {gridHeight}
+                  </div>
+                  <div>User: {userId}</div>
+                  <div>Editing: {activeChunkLabel}</div>
                 </div>
-                <div>User: {userId}</div>
-                <div>Editing: {activeChunkLabel}</div>
               </div>
-            </div>
 
               {notice && <div className="panel__notice">{notice}</div>}
 
@@ -885,7 +797,7 @@ export default function EditorGame() {
                           title={`Owner: ${owner ?? "none"}`}
                           style={{
                             background: TILE_COLORS[cell],
-                            cursor: isOwned ? "pointer" : "not-allowed",
+                            cursor: "pointer",
                           }}
                         />
                       );
@@ -1009,17 +921,13 @@ export default function EditorGame() {
             <div className="panel">
               <div className="panel__title">Claim chunk</div>
               <p className="panel__desc">
-                Uses tiles from the selected chunk. Coordinates are assigned
-                on-chain.
+                Uses tiles from the selected chunk. Location is random but must
+                touch existing chunks.
               </p>
               <div className="panel__rows">
                 <div>
                   <span>Selected chunk</span>
                   <span>{activeChunkLabel}</span>
-                </div>
-                <div>
-                  <span>Next on-chain</span>
-                  <span>{nextChunkLabel}</span>
                 </div>
               </div>
               <div className="panel__field">
@@ -1419,17 +1327,6 @@ function normalizeMoveVector(value: unknown): unknown[] {
 }
 
 function parseU32Value(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.floor(value));
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return Math.max(0, parsed);
-  }
-  return null;
-}
-
-function parseU64Value(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.floor(value));
   }

@@ -4,6 +4,7 @@ module chunk_world::world {
 
     use sui::dynamic_field as df;
     use sui::event;
+    use sui::random;
 
     // NFT Display
     use sui::package;
@@ -14,7 +15,6 @@ module chunk_world::world {
     const CHUNK_SIZE: u64 = 8;
     const TILES_LEN: u64 = 64; // 8*8
     const MAX_URL_BYTES: u64 = 2048;
-    const WORLD_ROW_LEN: u64 = 16;
 
     const U32_MAX: u32 = 4294967295;
 
@@ -28,7 +28,6 @@ module chunk_world::world {
     const E_CHUNK_ALREADY_EXISTS: u64 = 5;
     const E_FIRST_CHUNK_MUST_BE_ORIGIN: u64 = 6;
     const E_NO_ADJACENT_CHUNK: u64 = 7;
-    const E_WORLD_FULL: u64 = 8;
 
     /* ================= ADMIN / REGISTRY ================= */
 
@@ -45,16 +44,17 @@ module chunk_world::world {
 
     /* ================= WORLD (SHARED) ================= */
 
-    public struct WorldMap has key, store {
-        id: UID,
-        chunk_count: u64,
-        admin: address,
-    }
-
     /// Key cho dynamic field: (cx, cy) -> chunk_id
     public struct ChunkKey has copy, drop, store {
         cx: u32,
         cy: u32,
+    }
+
+    public struct WorldMap has key, store {
+        id: UID,
+        chunk_count: u64,
+        admin: address,
+        chunks: vector<ChunkKey>,
     }
 
     /* ================= CHUNK NFT (OWNED) ================= */
@@ -174,6 +174,7 @@ module chunk_world::world {
             id: object::new(ctx),
             chunk_count: 0,
             admin,
+            chunks: vector[],
         };
 
         let world_id = object::uid_to_inner(&world.id);
@@ -186,12 +187,13 @@ module chunk_world::world {
 
     /* ================= USER: CLAIM / MINT CHUNK NFT ================= */
 
-    /// User claim chunk NFT. Coordinates are assigned automatically.
+    /// User claim chunk NFT. Coordinates are chosen randomly among adjacent slots.
     /// Rule:
     /// - Chunk đầu tiên của world bắt buộc (0,0)
     /// - Chunk sau phải kề 1 chunk đã tồn tại (4 hướng)
      entry fun claim_chunk(
         world: &mut WorldMap,
+        randomness: &random::Random,
         image_url: String,
         tiles: vector<u8>,
         ctx: &mut TxContext
@@ -200,9 +202,16 @@ module chunk_world::world {
         assert!(vector::length(&tiles) == TILES_LEN, E_INVALID_TILES_LEN);
         assert_tiles_valid(&tiles);
 
-        let (cx, cy) = next_chunk_coords(world.chunk_count);
-        let key = ChunkKey { cx, cy };
-        assert!(!df::exists_(&world.id, key), E_CHUNK_ALREADY_EXISTS);
+        let (cx, cy) = if (world.chunk_count == 0) {
+            (0, 0)
+        } else {
+            let mut generator = random::new_generator(randomness, ctx);
+            pick_random_adjacent(world, &mut generator)
+        };
+        assert!(
+            !df::exists_(&world.id, ChunkKey { cx, cy }),
+            E_CHUNK_ALREADY_EXISTS
+        );
 
         if (world.chunk_count == 0) {
             assert!(cx == 0 && cy == 0, E_FIRST_CHUNK_MUST_BE_ORIGIN);
@@ -227,6 +236,7 @@ module chunk_world::world {
         // index (cx,cy) -> chunk_id
         df::add(&mut world.id, ChunkKey { cx, cy }, chunk_id);
         world.chunk_count = world.chunk_count + 1;
+        vector::push_back(&mut world.chunks, ChunkKey { cx, cy });
 
         event::emit(ChunkClaimedEvent { world_id, chunk_id, cx, cy, owner: sender });
 
@@ -275,12 +285,56 @@ module chunk_world::world {
 
     /* ================= INTERNAL HELPERS ================= */
 
-    fun next_chunk_coords(chunk_index: u64): (u32, u32) {
-        let cy64 = chunk_index / WORLD_ROW_LEN;
-        assert!(cy64 <= (U32_MAX as u64), E_WORLD_FULL);
-        let cx = (chunk_index % WORLD_ROW_LEN) as u32;
-        let cy = cy64 as u32;
-        (cx, cy)
+    fun pick_random_adjacent(
+        world: &WorldMap,
+        rng: &mut random::RandomGenerator
+    ): (u32, u32) {
+        let mut candidates = vector[];
+        let total = vector::length(&world.chunks);
+        let mut i = 0;
+        while (i < total) {
+            let chunk = *vector::borrow(&world.chunks, i);
+            let cx = chunk.cx;
+            let cy = chunk.cy;
+
+            // left
+            if (cx > 0) {
+                let nx = cx - 1;
+                if (!df::exists_(&world.id, ChunkKey { cx: nx, cy })) {
+                    vector::push_back(&mut candidates, ChunkKey { cx: nx, cy });
+                };
+            };
+            // right (avoid overflow)
+            if (cx < U32_MAX) {
+                let nx = cx + 1;
+                if (!df::exists_(&world.id, ChunkKey { cx: nx, cy })) {
+                    vector::push_back(&mut candidates, ChunkKey { cx: nx, cy });
+                };
+            };
+
+            // top
+            if (cy > 0) {
+                let ny = cy - 1;
+                if (!df::exists_(&world.id, ChunkKey { cx, cy: ny })) {
+                    vector::push_back(&mut candidates, ChunkKey { cx, cy: ny });
+                };
+            };
+            // bottom (avoid overflow)
+            if (cy < U32_MAX) {
+                let ny = cy + 1;
+                if (!df::exists_(&world.id, ChunkKey { cx, cy: ny })) {
+                    vector::push_back(&mut candidates, ChunkKey { cx, cy: ny });
+                };
+            };
+
+            i = i + 1;
+        };
+
+        let count = vector::length(&candidates);
+        assert!(count > 0, E_NO_ADJACENT_CHUNK);
+        let index = random::generate_u64_in_range(rng, 0, count - 1);
+        let chosen = *vector::borrow(&candidates, index);
+        (chosen.cx, chosen.cy)
     }
 
     fun has_adjacent(world: &WorldMap, cx: u32, cy: u32): bool {

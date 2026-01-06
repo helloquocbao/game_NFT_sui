@@ -317,6 +317,15 @@
   background: #f7f2e8;
   padding: 12px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.8);
+  width: min(100%, 70vh);
+  aspect-ratio: 1 / 1;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.editor-grid-wrap.is-dragging {
+  cursor: grabbing;
 }
 
 .editor-grid {

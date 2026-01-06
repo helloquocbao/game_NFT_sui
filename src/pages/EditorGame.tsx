@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ConnectButton,
@@ -67,6 +67,7 @@ export default function EditorGame() {
   const [txDigest, setTxDigest] = useState<string>("");
   const [txError, setTxError] = useState<string>("");
   const [busyAction, setBusyAction] = useState<string>("");
+  const [isDraggingGrid, setIsDraggingGrid] = useState(false);
 
   const [chunkCx, setChunkCx] = useState("0");
   const [chunkCy, setChunkCy] = useState("0");
@@ -75,6 +76,17 @@ export default function EditorGame() {
   const [updateImageUrl, setUpdateImageUrl] = useState("");
   const [tileX, setTileX] = useState("0");
   const [tileY, setTileY] = useState("0");
+
+  const gridWrapRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
+  const blockClickRef = useRef(false);
 
   useEffect(() => {
     loadMap();
@@ -139,6 +151,7 @@ export default function EditorGame() {
   /* ================= EDIT ================= */
 
   function paint(x: number, y: number) {
+    if (blockClickRef.current) return;
     const owner = getChunkOwnerAt(chunkOwners, x, y);
     if (owner !== userId) {
       setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
@@ -150,6 +163,63 @@ export default function EditorGame() {
       copy[y][x] = selectedTile;
       return copy;
     });
+  }
+
+  function handleGridPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const wrap = gridWrapRef.current;
+    if (!wrap) return;
+    blockClickRef.current = false;
+    dragRef.current.active = true;
+    dragRef.current.moved = false;
+    dragRef.current.startX = event.clientX;
+    dragRef.current.startY = event.clientY;
+    dragRef.current.scrollLeft = wrap.scrollLeft;
+    dragRef.current.scrollTop = wrap.scrollTop;
+    wrap.setPointerCapture(event.pointerId);
+  }
+
+  function handleGridPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const wrap = gridWrapRef.current;
+    if (!wrap || !dragRef.current.active) return;
+
+    const dx = event.clientX - dragRef.current.startX;
+    const dy = event.clientY - dragRef.current.startY;
+    const movedEnough = Math.abs(dx) > 4 || Math.abs(dy) > 4;
+
+    if (!dragRef.current.moved && !movedEnough) return;
+
+    if (!dragRef.current.moved) {
+      dragRef.current.moved = true;
+      setIsDraggingGrid(true);
+    }
+
+    event.preventDefault();
+    wrap.scrollLeft = dragRef.current.scrollLeft - dx;
+    wrap.scrollTop = dragRef.current.scrollTop - dy;
+    blockClickRef.current = true;
+  }
+
+  function handleGridPointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    const wrap = gridWrapRef.current;
+    if (!dragRef.current.active) return;
+
+    dragRef.current.active = false;
+    if (wrap?.hasPointerCapture(event.pointerId)) {
+      wrap.releasePointerCapture(event.pointerId);
+    }
+
+    const shouldBlock = dragRef.current.moved;
+    dragRef.current.moved = false;
+    setIsDraggingGrid(false);
+
+    if (shouldBlock) {
+      setTimeout(() => {
+        blockClickRef.current = false;
+      }, 0);
+    } else {
+      blockClickRef.current = false;
+    }
   }
 
   /* ================= CHUNK LOGIC ================= */
@@ -485,7 +555,17 @@ export default function EditorGame() {
                 ))}
               </div>
 
-              <div className="editor-grid-wrap">
+              <div
+                ref={gridWrapRef}
+                className={`editor-grid-wrap ${
+                  isDraggingGrid ? "is-dragging" : ""
+                }`}
+                onPointerDown={handleGridPointerDown}
+                onPointerMove={handleGridPointerMove}
+                onPointerUp={handleGridPointerEnd}
+                onPointerLeave={handleGridPointerEnd}
+                onPointerCancel={handleGridPointerEnd}
+              >
                 <div
                   className="editor-grid"
                   style={{

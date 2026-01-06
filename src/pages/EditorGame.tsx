@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ADMIN_CAP_ID,
+  PACKAGE_ID,
+  SUI_RPC_URL,
+  WORLD_REGISTRY_ID,
+} from "../chain/config";
+import { suiClient } from "../chain/suiClient";
 
 /**
  * TILE CODE
@@ -43,12 +50,50 @@ export default function EditorGame() {
   const [chunkOwners, setChunkOwners] = useState<ChunkOwners>(() =>
     createOwnersForGrid(createDefaultGrid(), initialUserId)
   );
+  const [worldId, setWorldId] = useState<string>("");
+  const [chainError, setChainError] = useState<string>("");
 
   useEffect(() => {
     loadMap();
   }, []);
 
+  useEffect(() => {
+    loadWorldId();
+  }, [WORLD_REGISTRY_ID]);
+
   /* ================= MAP IO ================= */
+
+  async function loadWorldId() {
+    setChainError("");
+    if (!WORLD_REGISTRY_ID) {
+      setWorldId("");
+      return;
+    }
+
+    try {
+      const result = await suiClient.getObject({
+        id: WORLD_REGISTRY_ID,
+        options: { showContent: true },
+      });
+      const content = result.data?.content;
+      if (!content || content.dataType !== "moveObject") {
+        setWorldId("");
+        return;
+      }
+
+      const fields = content.fields as Record<string, unknown>;
+      const worldField = fields.world_id as
+        | { vec?: unknown[]; fields?: { vec?: unknown[] } }
+        | undefined;
+      const vec = worldField?.vec ?? worldField?.fields?.vec;
+      const id =
+        Array.isArray(vec) && vec.length > 0 ? String(vec[0]) : "";
+      setWorldId(id);
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : String(err));
+      setWorldId("");
+    }
+  }
 
   function saveMap() {
     const data = {
@@ -168,6 +213,27 @@ export default function EditorGame() {
         <div>User: {userId}</div>
         <button onClick={changeUser}>Switch User</button>
         {notice && <div style={{ color: "#ffcc80" }}>{notice}</div>}
+      </div>
+
+      {/* CHAIN INFO */}
+      <div
+        style={{
+          marginBottom: 12,
+          padding: 10,
+          border: "1px solid #555",
+          background: "#111",
+          color: "#ddd",
+        }}
+      >
+        <div>Chain RPC: {SUI_RPC_URL}</div>
+        <div>Package: {PACKAGE_ID || "missing"}</div>
+        <div>AdminCap: {ADMIN_CAP_ID || "missing"}</div>
+        <div>WorldRegistry: {WORLD_REGISTRY_ID || "missing"}</div>
+        <div>WorldId: {worldId || "not created"}</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button onClick={loadWorldId}>Refresh World</button>
+        </div>
+        {chainError && <div style={{ color: "#ff8a80" }}>{chainError}</div>}
       </div>
 
       {/* TILE TOOLBAR */}

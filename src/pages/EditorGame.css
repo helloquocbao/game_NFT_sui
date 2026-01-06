@@ -227,6 +227,16 @@
   background: rgba(255, 255, 255, 0.9);
 }
 
+.panel__field select {
+  border: 1.5px solid rgba(34, 50, 71, 0.45);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+}
+
 .panel__actions {
   display: flex;
   gap: 10px;

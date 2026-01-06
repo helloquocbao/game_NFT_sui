@@ -64,10 +64,16 @@ export default function EditorGame() {
   const [worldId, setWorldId] = useState<string>("");
   const [worldOverride, setWorldOverride] = useState<string>("");
   const [chainError, setChainError] = useState<string>("");
+  const [worldList, setWorldList] = useState<string[]>([]);
+  const [worldListError, setWorldListError] = useState("");
+  const [isWorldListLoading, setIsWorldListLoading] = useState(false);
   const [txDigest, setTxDigest] = useState<string>("");
   const [txError, setTxError] = useState<string>("");
   const [busyAction, setBusyAction] = useState<string>("");
   const [isDraggingGrid, setIsDraggingGrid] = useState(false);
+  const [isMapLoading, setIsMapLoading] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState("");
+  const [loadedChunks, setLoadedChunks] = useState<number | null>(null);
 
   const [chunkCx, setChunkCx] = useState("0");
   const [chunkCy, setChunkCy] = useState("0");
@@ -93,7 +99,10 @@ export default function EditorGame() {
   }, []);
 
   useEffect(() => {
-    loadWorldId();
+    void (async () => {
+      const id = await loadWorldId();
+      await loadWorldList(id);
+    })();
   }, [WORLD_REGISTRY_ID]);
 
   const gridWidth = grid[0]?.length ?? 0;
@@ -101,6 +110,10 @@ export default function EditorGame() {
   const worldIdValue = worldOverride.trim() || worldId;
   const isConnected = Boolean(account?.address);
   const isBusy = isPending || Boolean(busyAction);
+  const worldListOptions = useMemo(
+    () => worldList.filter((id) => id && id !== worldId),
+    [worldList, worldId]
+  );
 
   const mapStats = useMemo(() => {
     const cols = Math.ceil(gridWidth / CHUNK_SIZE);
@@ -268,11 +281,11 @@ export default function EditorGame() {
 
   /* ================= CHAIN IO ================= */
 
-  async function loadWorldId() {
+  async function loadWorldId(): Promise<string> {
     setChainError("");
     if (!WORLD_REGISTRY_ID) {
       setWorldId("");
-      return;
+      return "";
     }
 
     try {
@@ -280,22 +293,175 @@ export default function EditorGame() {
         id: WORLD_REGISTRY_ID,
         options: { showContent: true },
       });
+
       const content = result.data?.content;
+
       if (!content || content.dataType !== "moveObject") {
         setWorldId("");
-        return;
+        return "";
       }
 
-      const fields = content.fields as Record<string, unknown>;
-      const worldField = fields.world_id as
-        | { vec?: unknown[]; fields?: { vec?: unknown[] } }
-        | undefined;
-      const vec = worldField?.vec ?? worldField?.fields?.vec;
+      const fields = normalizeMoveFields(content.fields);
+      const typeName = typeof content.type === "string" ? content.type : "";
+      if (typeName && !typeName.includes("WorldRegistry")) {
+        setChainError(`WORLD_REGISTRY_ID is ${typeName}, not WorldRegistry.`);
+      }
+
+      const worldField =
+        fields.world_id ?? fields.worldId ?? fields.world ?? undefined;
+      if (!worldField) {
+        setWorldId("");
+        return "";
+      }
+
+      const optionFields = normalizeMoveFields(worldField);
+      const vec = optionFields.vec;
+
       const id = Array.isArray(vec) && vec.length > 0 ? String(vec[0]) : "";
       setWorldId(id);
+      return id;
     } catch (error) {
       setChainError(error instanceof Error ? error.message : String(error));
       setWorldId("");
+      return "";
+    }
+  }
+
+  async function refreshWorldAndMap() {
+    setMapLoadError("");
+    const override = worldOverride.trim();
+    const registryId = await loadWorldId();
+    await loadWorldList(registryId);
+    const targetId = override || registryId;
+    if (!targetId) {
+      setMapLoadError("World id missing.");
+      return;
+    }
+    await loadWorldMap(targetId);
+  }
+
+  async function loadWorldMap(targetWorldId: string) {
+    setMapLoadError("");
+    setIsMapLoading(true);
+    setLoadedChunks(null);
+
+    try {
+      const fieldEntries = await fetchAllDynamicFields(targetWorldId);
+      if (fieldEntries.length === 0) {
+        setNotice("World has no chunks yet.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkEntries = await resolveChunkEntries(
+        targetWorldId,
+        fieldEntries
+      );
+      if (chunkEntries.length === 0) {
+        setNotice("No chunk entries found.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkIds = chunkEntries.map((entry) => entry.chunkId);
+      const chunkObjects = await suiClient.multiGetObjects({
+        ids: chunkIds,
+        options: { showContent: true, showOwner: true },
+      });
+
+      const maxCx = Math.max(...chunkEntries.map((entry) => entry.cx));
+      const maxCy = Math.max(...chunkEntries.map((entry) => entry.cy));
+      const width = (maxCx + 1) * CHUNK_SIZE;
+      const height = (maxCy + 1) * CHUNK_SIZE;
+
+      const newGrid = Array(height)
+        .fill(0)
+        .map(() => Array(width).fill(0));
+      const newOwners: ChunkOwners = {};
+
+      chunkEntries.forEach((entry, index) => {
+        const response = chunkObjects[index];
+        const content = response.data?.content;
+        if (!content || content.dataType !== "moveObject") return;
+        const fields = normalizeMoveFields(content.fields);
+        const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
+          clampU8(parseU32Value(tile) ?? 0, 8)
+        );
+
+        for (let y = 0; y < CHUNK_SIZE; y++) {
+          for (let x = 0; x < CHUNK_SIZE; x++) {
+            const idx = y * CHUNK_SIZE + x;
+            newGrid[entry.cy * CHUNK_SIZE + y][entry.cx * CHUNK_SIZE + x] =
+              tiles[idx] ?? 0;
+          }
+        }
+
+        const owner = extractOwnerAddress(response.data?.owner);
+        if (owner) {
+          newOwners[makeChunkKey(entry.cx, entry.cy)] = owner;
+        }
+      });
+
+      setGrid(newGrid);
+      setChunkOwners(newOwners);
+      setLoadedChunks(chunkEntries.length);
+      setNotice(`Loaded ${chunkEntries.length} chunks from chain.`);
+    } catch (error) {
+      setMapLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsMapLoading(false);
+    }
+  }
+
+  async function loadWorldList(registryId?: string) {
+    setWorldListError("");
+    setIsWorldListLoading(true);
+
+    try {
+      const ids = new Set<string>();
+      const regId = registryId ?? worldId;
+      if (regId) ids.add(regId);
+      const overrideId = worldOverride.trim();
+      if (overrideId) ids.add(overrideId);
+
+      if (PACKAGE_ID) {
+        const eventType = `${PACKAGE_ID}::world::WorldCreatedEvent`;
+        let cursor: string | null | undefined = null;
+        let hasNextPage = true;
+        let rounds = 0;
+
+        while (hasNextPage && rounds < 6) {
+          const page = await suiClient.queryEvents({
+            query: { MoveEventType: eventType },
+            cursor: cursor ?? undefined,
+            limit: 50,
+            order: "descending",
+          });
+
+          for (const event of page.data) {
+            const parsed = event.parsedJson;
+            if (!parsed || typeof parsed !== "object") continue;
+            const record = parsed as Record<string, unknown>;
+            const id =
+              typeof record.world_id === "string"
+                ? record.world_id
+                : typeof record.worldId === "string"
+                ? record.worldId
+                : "";
+            if (id) ids.add(id);
+          }
+
+          cursor = page.nextCursor ?? null;
+          hasNextPage = page.hasNextPage;
+          rounds += 1;
+        }
+      }
+
+      setWorldList([...ids]);
+    } catch (error) {
+      setWorldListError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsWorldListLoading(false);
     }
   }
 
@@ -352,6 +518,7 @@ export default function EditorGame() {
       setTxError("Connect wallet first.");
       return;
     }
+
     if (!PACKAGE_ID) {
       setTxError("Missing package id.");
       return;
@@ -360,8 +527,10 @@ export default function EditorGame() {
     setBusyAction(label);
     try {
       const tx = new Transaction();
+
       build(tx);
       const result = await signAndExecute({ transaction: tx });
+
       setTxDigest(result.digest);
       onSuccess?.();
     } catch (error) {
@@ -374,7 +543,47 @@ export default function EditorGame() {
   function validateChunkInGrid(cx: number, cy: number) {
     if (cx < 0 || cy < 0) return false;
     if (cx >= mapStats.cols || cy >= mapStats.rows) return false;
+
     return true;
+  }
+
+  function ensureChunkInGrid(cx: number, cy: number) {
+    const width = grid[0]?.length ?? 0;
+    const height = grid.length;
+    const cols = Math.ceil(width / CHUNK_SIZE) || 0;
+    const rows = Math.ceil(height / CHUNK_SIZE) || 0;
+    const nextCols = Math.max(cols, cx + 1);
+    const nextRows = Math.max(rows, cy + 1);
+
+    if (nextCols === cols && nextRows === rows) {
+      return { grid, owners: chunkOwners };
+    }
+
+    const nextWidth = nextCols * CHUNK_SIZE;
+    const nextHeight = nextRows * CHUNK_SIZE;
+    const nextGrid = Array(nextHeight)
+      .fill(0)
+      .map(() => Array(nextWidth).fill(DEFAULT_FLOOR));
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        nextGrid[y][x] = grid[y][x];
+      }
+    }
+
+    const nextOwners = { ...chunkOwners };
+    for (let cyIndex = 0; cyIndex < nextRows; cyIndex++) {
+      for (let cxIndex = 0; cxIndex < nextCols; cxIndex++) {
+        const key = makeChunkKey(cxIndex, cyIndex);
+        if (!nextOwners[key]) {
+          nextOwners[key] = userId;
+        }
+      }
+    }
+
+    setGrid(nextGrid);
+    setChunkOwners(nextOwners);
+    return { grid: nextGrid, owners: nextOwners };
   }
 
   async function createWorldOnChain() {
@@ -403,12 +612,10 @@ export default function EditorGame() {
 
     const cx = parseCoord(chunkCx);
     const cy = parseCoord(chunkCy);
-    if (!validateChunkInGrid(cx, cy)) {
-      setTxError("Chunk coords are outside the local grid.");
-      return;
-    }
+    console.log("Claim chunk at", cx, cy);
 
-    const tiles = buildChunkTiles(grid, cx, cy);
+    const { grid: workingGrid } = ensureChunkInGrid(cx, cy);
+    const tiles = buildChunkTiles(workingGrid, cx, cy);
     const imageUrl = claimImageUrl.trim();
 
     await runTx(
@@ -447,7 +654,10 @@ export default function EditorGame() {
     await runTx("Set tiles", (tx) => {
       tx.moveCall({
         target: `${PACKAGE_ID}::world::set_tiles`,
-        arguments: [tx.object(chunkObjectId.trim()), tx.pure.vector("u8", tiles)],
+        arguments: [
+          tx.object(chunkObjectId.trim()),
+          tx.pure.vector("u8", tiles),
+        ],
       });
     });
   }
@@ -605,7 +815,10 @@ export default function EditorGame() {
                 <button className="btn btn--outline" onClick={clearMap}>
                   Clear
                 </button>
-                <button className="btn btn--dark" onClick={() => navigate("/game")}>
+                <button
+                  className="btn btn--dark"
+                  onClick={() => navigate("/game")}
+                >
                   Play
                 </button>
               </div>
@@ -636,6 +849,30 @@ export default function EditorGame() {
                   <span>World</span>
                   <span>{shortAddress(worldId) || "not created"}</span>
                 </div>
+                <div>
+                  <span>Chunks</span>
+                  <span>{loadedChunks === null ? "-" : loadedChunks}</span>
+                </div>
+              </div>
+
+              <div className="panel__field">
+                <label>World list</label>
+                <select
+                  value={worldOverride}
+                  onChange={(event) => setWorldOverride(event.target.value)}
+                  disabled={isWorldListLoading}
+                >
+                  <option value="">
+                    {worldId
+                      ? `Use registry (${shortAddress(worldId)})`
+                      : "Use registry (empty)"}
+                  </option>
+                  {worldListOptions.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="panel__field">
@@ -648,12 +885,22 @@ export default function EditorGame() {
               </div>
 
               <div className="panel__actions">
-                <button className="btn btn--ghost" onClick={loadWorldId}>
-                  Refresh world
+                <button
+                  className="btn btn--ghost"
+                  onClick={refreshWorldAndMap}
+                  disabled={isMapLoading}
+                >
+                  {isMapLoading ? "Loading map..." : "Refresh world"}
                 </button>
               </div>
 
               {chainError && <div className="panel__error">{chainError}</div>}
+              {worldListError && (
+                <div className="panel__error">{worldListError}</div>
+              )}
+              {mapLoadError && (
+                <div className="panel__error">{mapLoadError}</div>
+              )}
             </div>
 
             <div className="panel">
@@ -803,7 +1050,9 @@ export default function EditorGame() {
               <div className="panel__rows">
                 <div>
                   <span>Wallet</span>
-                  <span>{shortAddress(account?.address) || "not connected"}</span>
+                  <span>
+                    {shortAddress(account?.address) || "not connected"}
+                  </span>
                 </div>
                 <div>
                   <span>Action</span>
@@ -1051,6 +1300,118 @@ function shortAddress(value?: string) {
   if (!value) return "";
   if (value.length <= 12) return value;
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function normalizeMoveFields(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  if (record.fields && typeof record.fields === "object") {
+    return record.fields as Record<string, unknown>;
+  }
+  return record;
+}
+
+function normalizeMoveVector(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const fields = normalizeMoveFields(value);
+  if (Array.isArray(fields.vec)) return fields.vec;
+  return [];
+}
+
+function parseU32Value(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+}
+
+function extractChunkCoords(value: unknown): { cx: number; cy: number } | null {
+  const fields = normalizeMoveFields(value);
+  const cx = parseU32Value(fields.cx);
+  const cy = parseU32Value(fields.cy);
+  if (cx === null || cy === null) return null;
+  return { cx, cy };
+}
+
+function extractOwnerAddress(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.AddressOwner === "string") return record.AddressOwner;
+  if (typeof record.ObjectOwner === "string") return record.ObjectOwner;
+  if (
+    record.ConsensusAddressOwner &&
+    typeof record.ConsensusAddressOwner === "object"
+  ) {
+    const inner = record.ConsensusAddressOwner as Record<string, unknown>;
+    if (typeof inner.owner === "string") return inner.owner;
+  }
+  return "";
+}
+
+async function fetchAllDynamicFields(parentId: string) {
+  const all: Array<{ name: { type?: string; value?: unknown } }> = [];
+  let cursor: string | null | undefined = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const page = await suiClient.getDynamicFields({
+      parentId,
+      cursor: cursor ?? undefined,
+      limit: 50,
+    });
+    all.push(...page.data);
+    cursor = page.nextCursor ?? null;
+    hasNextPage = page.hasNextPage;
+  }
+
+  return all;
+}
+
+async function resolveChunkEntries(
+  worldId: string,
+  fields: Array<{ name: { type?: string; value?: unknown } }>
+) {
+  const results = await Promise.allSettled(
+    fields.map(async (field) => {
+      if (field.name?.type && !field.name.type.includes("ChunkKey")) {
+        return null;
+      }
+      const coords = extractChunkCoords(field.name?.value);
+      if (!coords) return null;
+
+      const fieldObject = await suiClient.getDynamicFieldObject({
+        parentId: worldId,
+        name: field.name,
+      });
+      const content = fieldObject.data?.content;
+      if (!content || content.dataType !== "moveObject") return null;
+      const fieldFields = normalizeMoveFields(content.fields);
+      const chunkId = extractObjectId(fieldFields.value);
+      if (!chunkId) return null;
+      return { ...coords, chunkId };
+    })
+  );
+
+  return results
+    .filter(
+      (
+        result
+      ): result is PromiseFulfilledResult<{
+        cx: number;
+        cy: number;
+        chunkId: string;
+      }> => result.status === "fulfilled"
+    )
+    .map((result) => result.value)
+    .filter((entry): entry is { cx: number; cy: number; chunkId: string } =>
+      Boolean(entry)
+    );
 }
 
 /* ================= TILE BUTTON ================= */

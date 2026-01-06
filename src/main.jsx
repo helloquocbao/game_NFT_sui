@@ -15,14 +15,13 @@ import "@mysten/dapp-kit/dist/index.css";
 
 const queryClient = new QueryClient();
 const { networkConfig } = createNetworkConfig({
-  custom: { url: SUI_RPC_URL || getFullnodeUrl("testnet") },
-  testnet: { url: getFullnodeUrl("testnet") },
+  testnet: { url: SUI_RPC_URL || getFullnodeUrl("testnet") },
 });
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networkConfig} defaultNetwork="custom">
+    <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
         <WalletProvider autoConnect>
           <BrowserRouter>
             <App />

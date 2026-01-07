@@ -189,6 +189,62 @@
   color: #516073;
 }
 
+.game-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.game-field label {
+  color: #516073;
+}
+
+.game-field select {
+  border: 1.5px solid rgba(34, 50, 71, 0.45);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #1c2633;
+}
+
+.game-btn {
+  border: 2px solid rgba(34, 50, 71, 0.6);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 11px;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: rgba(255, 255, 255, 0.9);
+  color: #1c2633;
+  box-shadow: 4px 4px 0 rgba(34, 50, 71, 0.25);
+}
+
+.game-btn--primary {
+  background: #59b7ff;
+  color: #0f2233;
+}
+
+.game-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.game-btn:not(:disabled):hover {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 rgba(34, 50, 71, 0.25);
+}
+
 .game-info__card {
   display: flex;
   justify-content: space-between;
@@ -203,6 +259,15 @@
 .game-info__note {
   font-size: 12px;
   color: #516073;
+}
+
+.game-info__error {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(233, 95, 76, 0.16);
+  border: 1px solid rgba(233, 95, 76, 0.35);
+  color: #b13b32;
+  font-size: 12px;
 }
 
 @media (max-width: 960px) {

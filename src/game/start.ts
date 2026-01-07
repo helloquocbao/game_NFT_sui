@@ -4,8 +4,18 @@ import kaboom, { GameObj } from "kaboom";
 let started = false;
 const TILE = 32;
 
-export function startGame() {
-  if (started) return;
+type GameMapData = {
+  tileSize: number;
+  grid: number[][];
+};
+
+export function startGame(mapData?: GameMapData) {
+  if (started) {
+    if (mapData) {
+      go("game", { mapData });
+    }
+    return;
+  }
   started = true;
 
   kaboom({
@@ -42,11 +52,16 @@ export function startGame() {
 
   /* ================= MAP ================= */
 
-  function loadMap() {
+  function loadMap(): GameMapData | null {
     const raw = localStorage.getItem("CUSTOM_MAP");
     if (!raw) return null;
 
-    return JSON.parse(raw);
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
   }
 
   function gridToLevel(grid: number[][]) {
@@ -75,19 +90,20 @@ export function startGame() {
 
   /* ================= SCENE ================= */
 
-  scene("game", () => {
-    const mapData = loadMap();
-    if (!mapData?.grid) {
+  scene("game", (data?: { mapData?: GameMapData }) => {
+    const resolvedMap = data?.mapData ?? loadMap();
+    if (!resolvedMap?.grid) {
       add([text("NO MAP FOUND"), pos(center()), anchor("center")]);
       return;
     }
 
-    const spawnPos = findSpawn(mapData.grid, mapData.tileSize);
-    const level = gridToLevel(mapData.grid);
+    const tileSize = resolvedMap.tileSize || TILE;
+    const spawnPos = findSpawn(resolvedMap.grid, tileSize);
+    const level = gridToLevel(resolvedMap.grid);
 
     addLevel(level, {
-      tileWidth: mapData.tileSize,
-      tileHeight: mapData.tileSize,
+      tileWidth: tileSize,
+      tileHeight: tileSize,
       tiles: {
         "#": () => [rect(TILE, TILE), area(), color(120, 120, 120), "wall"],
         "^": () => [rect(TILE, TILE), area(), color(255, 0, 0), "trap"],
@@ -132,9 +148,9 @@ export function startGame() {
     /* ================= MOVE ================= */
 
     function canMove(pos: Vec2) {
-      const x = Math.floor(pos.x / mapData.tileSize);
-      const y = Math.floor(pos.y / mapData.tileSize);
-      return mapData.grid[y]?.[x] >= 5;
+      const x = Math.floor(pos.x / tileSize);
+      const y = Math.floor(pos.y / tileSize);
+      return resolvedMap.grid[y]?.[x] >= 5;
     }
 
     /* ================= ATTACK ================= */
@@ -201,5 +217,9 @@ export function startGame() {
     });
   });
 
-  go("game");
+  if (mapData) {
+    go("game", { mapData });
+  } else {
+    go("game");
+  }
 }

@@ -144,13 +144,14 @@
 }
 
 .game-stage {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 24px;
-  align-items: start;
 }
 
 .game-frame {
+  width: min(960px, 100%);
   background: rgba(255, 255, 255, 0.92);
   border-radius: 22px;
   border: 2px solid rgba(34, 50, 71, 0.45);
@@ -171,6 +172,7 @@
 }
 
 .game-info {
+  width: min(320px, 100%);
   background: rgba(255, 255, 255, 0.88);
   border-radius: 20px;
   border: 2px solid rgba(34, 50, 71, 0.35);
@@ -268,12 +270,6 @@
   border: 1px solid rgba(233, 95, 76, 0.35);
   color: #b13b32;
   font-size: 12px;
-}
-
-@media (max-width: 960px) {
-  .game-stage {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 720px) {

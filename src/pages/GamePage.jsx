@@ -1,23 +1,412 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { PACKAGE_ID, WORLD_REGISTRY_ID } from "../chain/config";
+import { suiClient } from "../chain/suiClient";
 import { startGame } from "../game/start";
+import "./GamePage.css";
+
+const TILE_SIZE = 32;
+const CHUNK_SIZE = 8;
 
 export default function GamePage() {
+  const [worldId, setWorldId] = useState("");
+  const [worldList, setWorldList] = useState([]);
+  const [worldListError, setWorldListError] = useState("");
+  const [isWorldListLoading, setIsWorldListLoading] = useState(false);
+  const [selectedWorldId, setSelectedWorldId] = useState("");
+  const [mapLoadError, setMapLoadError] = useState("");
+  const [isMapLoading, setIsMapLoading] = useState(false);
+  const [loadedChunks, setLoadedChunks] = useState(null);
+
   useEffect(() => {
     startGame();
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      const id = await loadWorldId();
+      await loadWorldList(id);
+    })();
+  }, [WORLD_REGISTRY_ID]);
+
+  useEffect(() => {
+    if (!selectedWorldId && worldId) {
+      setSelectedWorldId(worldId);
+    }
+  }, [worldId, selectedWorldId]);
+
+  const worldListOptions = useMemo(() => {
+    const ids = new Set();
+    if (worldId) ids.add(worldId);
+    worldList.forEach((id) => ids.add(id));
+    return Array.from(ids);
+  }, [worldId, worldList]);
+
+  async function loadWorldId() {
+    setWorldListError("");
+    if (!WORLD_REGISTRY_ID) {
+      setWorldId("");
+      return "";
+    }
+
+    try {
+      const result = await suiClient.getObject({
+        id: WORLD_REGISTRY_ID,
+        options: { showContent: true },
+      });
+
+      const content = result.data?.content;
+      if (!content || content.dataType !== "moveObject") {
+        setWorldId("");
+        return "";
+      }
+
+      const fields = normalizeMoveFields(content.fields);
+      const worldField =
+        fields.world_id ?? fields.worldId ?? fields.world ?? undefined;
+      if (!worldField) {
+        setWorldId("");
+        return "";
+      }
+
+      const optionFields = normalizeMoveFields(worldField);
+      const vec = optionFields.vec;
+      const id = Array.isArray(vec) && vec.length > 0 ? String(vec[0]) : "";
+      setWorldId(id);
+      return id;
+    } catch (error) {
+      setWorldListError(error instanceof Error ? error.message : String(error));
+      setWorldId("");
+      return "";
+    }
+  }
+
+  async function loadWorldList(registryId) {
+    setWorldListError("");
+    setIsWorldListLoading(true);
+
+    try {
+      const ids = new Set();
+      if (registryId) ids.add(registryId);
+
+      if (PACKAGE_ID) {
+        const eventType = `${PACKAGE_ID}::world::WorldCreatedEvent`;
+        let cursor = null;
+        let hasNextPage = true;
+        let rounds = 0;
+
+        while (hasNextPage && rounds < 6) {
+          const page = await suiClient.queryEvents({
+            query: { MoveEventType: eventType },
+            cursor: cursor ?? undefined,
+            limit: 50,
+            order: "descending",
+          });
+
+          for (const event of page.data) {
+            const parsed = event.parsedJson;
+            if (!parsed || typeof parsed !== "object") continue;
+            const record = parsed;
+            const id =
+              typeof record.world_id === "string"
+                ? record.world_id
+                : typeof record.worldId === "string"
+                ? record.worldId
+                : "";
+            if (id) ids.add(id);
+          }
+
+          cursor = page.nextCursor ?? null;
+          hasNextPage = page.hasNextPage;
+          rounds += 1;
+        }
+      }
+
+      setWorldList(Array.from(ids));
+    } catch (error) {
+      setWorldListError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsWorldListLoading(false);
+    }
+  }
+
+  async function loadWorldMap(targetWorldId) {
+    setMapLoadError("");
+    setIsMapLoading(true);
+    setLoadedChunks(null);
+
+    try {
+      const fieldEntries = await fetchAllDynamicFields(targetWorldId);
+      if (fieldEntries.length === 0) {
+        setMapLoadError("World has no chunks yet.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkEntries = await resolveChunkEntries(
+        targetWorldId,
+        fieldEntries
+      );
+      if (chunkEntries.length === 0) {
+        setMapLoadError("No chunk entries found.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkIds = chunkEntries.map((entry) => entry.chunkId);
+      const chunkObjects = await suiClient.multiGetObjects({
+        ids: chunkIds,
+        options: { showContent: true },
+      });
+
+      const maxCx = Math.max(...chunkEntries.map((entry) => entry.cx));
+      const maxCy = Math.max(...chunkEntries.map((entry) => entry.cy));
+      const width = (maxCx + 1) * CHUNK_SIZE;
+      const height = (maxCy + 1) * CHUNK_SIZE;
+
+      const newGrid = Array(height)
+        .fill(0)
+        .map(() => Array(width).fill(0));
+
+      chunkEntries.forEach((entry, index) => {
+        const response = chunkObjects[index];
+        const content = response.data?.content;
+        if (!content || content.dataType !== "moveObject") return;
+        const fields = normalizeMoveFields(content.fields);
+        const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
+          clampU8(parseU32Value(tile) ?? 0, 8)
+        );
+
+        for (let y = 0; y < CHUNK_SIZE; y++) {
+          for (let x = 0; x < CHUNK_SIZE; x++) {
+            const idx = y * CHUNK_SIZE + x;
+            newGrid[entry.cy * CHUNK_SIZE + y][entry.cx * CHUNK_SIZE + x] =
+              tiles[idx] ?? 0;
+          }
+        }
+      });
+
+      const mapData = {
+        tileSize: TILE_SIZE,
+        width,
+        height,
+        grid: newGrid,
+      };
+      localStorage.setItem("CUSTOM_MAP", JSON.stringify(mapData));
+      startGame(mapData);
+      setLoadedChunks(chunkEntries.length);
+    } catch (error) {
+      setMapLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsMapLoading(false);
+    }
+  }
+
+  function handleLoadWorld() {
+    if (!selectedWorldId) {
+      setMapLoadError("Select a world to load.");
+      return;
+    }
+    void loadWorldMap(selectedWorldId);
+  }
+
   return (
-    <div
-      style={{
-        width: "100vw",
-        height: "100vh",
-        background: "black",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
-      <canvas id="game" />
+    <div className="game-page">
+      <div className="game-bg">
+        <span className="game-cloud game-cloud--a" />
+        <span className="game-cloud game-cloud--b" />
+        <span className="game-cloud game-cloud--c" />
+        <span className="game-haze" />
+      </div>
+
+      <div className="game-shell">
+        <header className="game-header">
+          <div>
+            <div className="game-eyebrow">Skyworld run</div>
+            <h1 className="game-title">Chunk adventure</h1>
+            <p className="game-subtitle">
+              Test your map and feel the flow before minting.
+            </p>
+          </div>
+          <div className="game-links">
+            <Link className="game-link" to="/">
+              Home
+            </Link>
+            <Link className="game-link" to="/editor">
+              Editor
+            </Link>
+          </div>
+        </header>
+
+        <div className="game-stage">
+          <div className="game-frame">
+            <canvas id="game" />
+          </div>
+
+          <aside className="game-info">
+            <div className="game-info__title">World</div>
+            <div className="game-field">
+              <label>World id</label>
+              <select
+                value={selectedWorldId}
+                onChange={(event) => setSelectedWorldId(event.target.value)}
+                disabled={isWorldListLoading}
+              >
+                <option value="">
+                  {worldListOptions.length > 0
+                    ? "Select world"
+                    : "No worlds found"}
+                </option>
+                {worldListOptions.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              className="game-btn game-btn--primary"
+              onClick={handleLoadWorld}
+              disabled={isMapLoading || !selectedWorldId}
+            >
+              {isMapLoading ? "Loading..." : "Load world"}
+            </button>
+            {loadedChunks !== null && (
+              <div className="game-info__note">
+                Loaded {loadedChunks} chunks.
+              </div>
+            )}
+            {worldListError && (
+              <div className="game-info__error">{worldListError}</div>
+            )}
+            {mapLoadError && (
+              <div className="game-info__error">{mapLoadError}</div>
+            )}
+
+            <div className="game-info__title">Controls</div>
+            <div className="game-info__card">
+              <span>Move</span>
+              <span>W A S D</span>
+            </div>
+            <div className="game-info__card">
+              <span>Attack</span>
+              <span>Space</span>
+            </div>
+            <div className="game-info__note">
+              Select a world and load the map to start exploring.
+            </div>
+          </aside>
+        </div>
+      </div>
     </div>
   );
+}
+
+function normalizeMoveFields(value) {
+  if (!value || typeof value !== "object") return {};
+  const record = value;
+  if (record.fields && typeof record.fields === "object") {
+    return record.fields;
+  }
+  return record;
+}
+
+function normalizeMoveVector(value) {
+  if (Array.isArray(value)) return value;
+  const fields = normalizeMoveFields(value);
+  if (Array.isArray(fields.vec)) return fields.vec;
+  return [];
+}
+
+function parseU32Value(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+}
+
+function clampU8(value, max) {
+  const clamped = Math.max(0, Math.min(max, value));
+  return Number.isFinite(clamped) ? clamped : 0;
+}
+
+function extractObjectId(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+
+  const record = value;
+  if (typeof record.id === "string") return record.id;
+  if (record.id && typeof record.id === "object") {
+    const nested = record.id;
+    if (typeof nested.id === "string") return nested.id;
+  }
+  if (record.fields && typeof record.fields === "object") {
+    const fields = record.fields;
+    if (typeof fields.id === "string") return fields.id;
+    if (fields.id && typeof fields.id === "object") {
+      const nested = fields.id;
+      if (typeof nested.id === "string") return nested.id;
+    }
+  }
+
+  return "";
+}
+
+function extractChunkCoords(value) {
+  const fields = normalizeMoveFields(value);
+  const cx = parseU32Value(fields.cx);
+  const cy = parseU32Value(fields.cy);
+  if (cx === null || cy === null) return null;
+  return { cx, cy };
+}
+
+async function fetchAllDynamicFields(parentId) {
+  const all = [];
+  let cursor = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const page = await suiClient.getDynamicFields({
+      parentId,
+      cursor: cursor ?? undefined,
+      limit: 50,
+    });
+    all.push(...page.data);
+    cursor = page.nextCursor ?? null;
+    hasNextPage = page.hasNextPage;
+  }
+
+  return all;
+}
+
+async function resolveChunkEntries(worldId, fields) {
+  const results = await Promise.allSettled(
+    fields.map(async (field) => {
+      if (field.name?.type && !field.name.type.includes("ChunkKey")) {
+        return null;
+      }
+      const coords = extractChunkCoords(field.name?.value);
+      if (!coords) return null;
+
+      const fieldObject = await suiClient.getDynamicFieldObject({
+        parentId: worldId,
+        name: field.name,
+      });
+      const content = fieldObject.data?.content;
+      if (!content || content.dataType !== "moveObject") return null;
+      const fieldFields = normalizeMoveFields(content.fields);
+      const chunkId = extractObjectId(fieldFields.value);
+      if (!chunkId) return null;
+      return { ...coords, chunkId };
+    })
+  );
+
+  return results
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value)
+    .filter((entry) => Boolean(entry));
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ConnectButton,
@@ -7,11 +7,13 @@ import {
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import {
-  EXPAND_FEE_MIST,
-  MODULE_NAME,
+  ADMIN_CAP_ID,
   PACKAGE_ID,
-  REGISTRY_ID,
-} from "../sui/config";
+  SUI_RPC_URL,
+  WORLD_REGISTRY_ID,
+} from "../chain/config";
+import { suiClient } from "../chain/suiClient";
+import "./EditorGame.css";
 
 /**
  * TILE CODE
@@ -26,446 +28,1255 @@ import {
  */
 
 const TILE_SIZE = 32;
-const CHUNK_SIZE = 16;
-const VIEW_W = 10;
-const VIEW_H = 10;
-
-type Chunk = number[][];
-type ChunkMap = Record<string, Chunk>;
+const CHUNK_SIZE = 8;
+const DEFAULT_FLOOR = 5;
+const USER_ID_KEY = "EDITOR_USER_ID";
+const RANDOM_OBJECT_ID = "0x8";
 
 const TILE_COLORS: Record<number, string> = {
-  0: "#000",
-  1: "#888",
-  2: "#e53935",
-  4: "#ff5050",
-  5: "#546e7a",
-  6: "#607d8b",
-  7: "#78909c",
-  8: "#90a4ae",
+  0: "#0b0b0b",
+  1: "#8d8d8d",
+  2: "#e04a3a",
+  4: "#ff6b4a",
+  5: "#58646b",
+  6: "#697680",
+  7: "#81919b",
+  8: "#9aa9b1",
 };
 
-function makeEmptyChunk() {
-  return Array(CHUNK_SIZE)
-    .fill(0)
-    .map(() => Array(CHUNK_SIZE).fill(0));
-}
-
-function chunkKey(cx: number, cy: number) {
-  return `${cx},${cy}`;
-}
-
-function mod(value: number, size: number) {
-  return ((value % size) + size) % size;
-}
-
-function getChunkCoords(x: number, y: number) {
-  const cx = Math.floor(x / CHUNK_SIZE);
-  const cy = Math.floor(y / CHUNK_SIZE);
-  const lx = mod(x, CHUNK_SIZE);
-  const ly = mod(y, CHUNK_SIZE);
-  return { cx, cy, lx, ly };
-}
-
-function getTile(chunks: ChunkMap, x: number, y: number) {
-  const { cx, cy, lx, ly } = getChunkCoords(x, y);
-  const chunk = chunks[chunkKey(cx, cy)];
-  if (!chunk) return 0;
-  return chunk[ly]?.[lx] ?? 0;
-}
-
-function isChunkEmpty(chunk: Chunk) {
-  for (let y = 0; y < CHUNK_SIZE; y++) {
-    for (let x = 0; x < CHUNK_SIZE; x++) {
-      if (chunk[y][x] !== 0) return false;
-    }
-  }
-  return true;
-}
-
-function gridToChunks(grid: number[][]) {
-  const chunks: ChunkMap = {};
-  for (let y = 0; y < grid.length; y++) {
-    for (let x = 0; x < grid[y].length; x++) {
-      const value = grid[y][x];
-      if (value === 0) continue;
-      const { cx, cy, lx, ly } = getChunkCoords(x, y);
-      const key = chunkKey(cx, cy);
-      if (!chunks[key]) chunks[key] = makeEmptyChunk();
-      chunks[key][ly][lx] = value;
-    }
-  }
-  return chunks;
-}
-
-function encodeUtf8(value: string) {
-  return Array.from(new TextEncoder().encode(value));
-}
+type ChunkOwners = Record<string, string>;
 
 export default function EditorGame() {
   const navigate = useNavigate();
   const account = useCurrentAccount();
-  const { mutate: signAndExecuteTransaction, isPending } =
+  const { mutateAsync: signAndExecute, isPending } =
     useSignAndExecuteTransaction();
 
+  const [userId] = useState(() => getOrCreateUserId());
+  const [notice, setNotice] = useState<string>("");
   const [selectedTile, setSelectedTile] = useState<number>(1);
+  const [grid, setGrid] = useState<number[][]>(() => createDefaultGrid());
+  const [chunkOwners, setChunkOwners] = useState<ChunkOwners>(() =>
+    createOwnersForGrid(createDefaultGrid(), userId)
+  );
+  const [activeChunkKey, setActiveChunkKey] = useState<string>("");
+  const [worldId, setWorldId] = useState<string>("");
+  const [worldOverride, setWorldOverride] = useState<string>("");
+  const [chainError, setChainError] = useState<string>("");
+  const [worldList, setWorldList] = useState<string[]>([]);
+  const [worldListError, setWorldListError] = useState("");
+  const [isWorldListLoading, setIsWorldListLoading] = useState(false);
+  const [txDigest, setTxDigest] = useState<string>("");
+  const [txError, setTxError] = useState<string>("");
+  const [busyAction, setBusyAction] = useState<string>("");
+  const [isDraggingGrid, setIsDraggingGrid] = useState(false);
+  const [isMapLoading, setIsMapLoading] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState("");
+  const [loadedChunks, setLoadedChunks] = useState<number | null>(null);
 
-  const [chunks, setChunks] = useState<ChunkMap>({});
-  const [viewOrigin, setViewOrigin] = useState({ x: 0, y: 0 });
-  const [chunkCoord, setChunkCoord] = useState({ x: 0, y: 0 });
-  const [walrusUri, setWalrusUri] = useState("");
-  const [contentHash, setContentHash] = useState("");
-  const [txStatus, setTxStatus] = useState("");
+  const [claimImageUrl, setClaimImageUrl] = useState("");
+  const [isChunkModalOpen, setIsChunkModalOpen] = useState(false);
+  const [hoveredChunkKey, setHoveredChunkKey] = useState("");
+  const [hoveredChunkId, setHoveredChunkId] = useState("");
+  const [isHoverIdLoading, setIsHoverIdLoading] = useState(false);
+
+  const chunkIdCacheRef = useRef<Record<string, string>>({});
+  const hoverRequestRef = useRef(0);
+  const gridWrapRef = useRef<HTMLDivElement | null>(null);
+  const clickTileRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
+  const blockClickRef = useRef(false);
 
   useEffect(() => {
-    loadMap();
-  }, []);
+    void (async () => {
+      const id = await loadWorldId();
+      await loadWorldList(id);
+    })();
+  }, [WORLD_REGISTRY_ID]);
 
-  function loadMap() {
-    const raw = localStorage.getItem("CUSTOM_MAP");
-    if (!raw) return;
+  const gridWidth = grid[0]?.length ?? 0;
+  const gridHeight = grid.length;
+  const worldIdValue = worldOverride.trim() || worldId;
+  const isConnected = Boolean(account?.address);
+  const isBusy = isPending || Boolean(busyAction);
+  const walletAddress = account?.address ?? "";
+  const isOwnerMatch = (owner?: string) =>
+    Boolean(
+      owner && (owner === userId || (walletAddress && owner === walletAddress))
+    );
+  const worldListOptions = useMemo(
+    () => worldList.filter((id) => id && id !== worldId),
+    [worldList, worldId]
+  );
 
-    try {
-      const data = JSON.parse(raw);
+  useEffect(() => {
+    chunkIdCacheRef.current = {};
+    hoverRequestRef.current = 0;
+    setHoveredChunkKey("");
+    setHoveredChunkId("");
+    setIsHoverIdLoading(false);
+  }, [worldIdValue]);
 
-      if (data?.chunks) {
-        setChunks(data.chunks);
-        return;
+  useEffect(() => {
+    if (!hoveredChunkKey) {
+      setHoveredChunkId("");
+      setIsHoverIdLoading(false);
+      return;
+    }
+    if (!worldIdValue || !PACKAGE_ID) {
+      setHoveredChunkId("");
+      setIsHoverIdLoading(false);
+      return;
+    }
+
+    const cached = chunkIdCacheRef.current[hoveredChunkKey];
+    if (cached !== undefined) {
+      setHoveredChunkId(cached);
+      setIsHoverIdLoading(false);
+      return;
+    }
+
+    const [cxRaw, cyRaw] = hoveredChunkKey.split(",");
+    const cx = parseCoord(cxRaw ?? "0");
+    const cy = parseCoord(cyRaw ?? "0");
+    const requestId = (hoverRequestRef.current += 1);
+    setIsHoverIdLoading(true);
+
+    void (async () => {
+      const resolved = await fetchChunkObjectId(cx, cy, { silent: true });
+      if (requestId !== hoverRequestRef.current) return;
+      chunkIdCacheRef.current[hoveredChunkKey] = resolved;
+      setHoveredChunkId(resolved);
+      setIsHoverIdLoading(false);
+    })();
+  }, [hoveredChunkKey, worldIdValue]);
+
+  const activeChunkLabel = activeChunkKey
+    ? activeChunkKey.replace(",", ", ")
+    : "none";
+  const activeChunkOwner = activeChunkKey
+    ? chunkOwners[activeChunkKey]
+    : undefined;
+  const canSaveActiveChunk =
+    Boolean(activeChunkKey) && isOwnerMatch(activeChunkOwner);
+  const activeChunkCoords = useMemo(() => {
+    if (!activeChunkKey) return null;
+    const [cxRaw, cyRaw] = activeChunkKey.split(",");
+    return { cx: parseCoord(cxRaw ?? "0"), cy: parseCoord(cyRaw ?? "0") };
+  }, [activeChunkKey]);
+  const hoveredChunkLabel = hoveredChunkKey
+    ? hoveredChunkKey.replace(",", ", ")
+    : "none";
+  const hoveredChunkIdDisplay = !hoveredChunkKey
+    ? "-"
+    : !worldIdValue || !PACKAGE_ID
+    ? "not available"
+    : isHoverIdLoading
+    ? "loading..."
+    : hoveredChunkId || "not found";
+  const activeChunkIdDisplay =
+    activeChunkKey && activeChunkKey === hoveredChunkKey
+      ? hoveredChunkIdDisplay
+      : "-";
+
+  /* ================= EDIT ================= */
+
+  function handleTilePointerEnter(chunkKey: string, isOwned: boolean) {
+    if (isDraggingGrid) return;
+    if (!isOwned) {
+      if (hoveredChunkKey) {
+        setHoveredChunkKey("");
       }
-
-      // Xử lý format cũ (tiles object)
-      if (data.tiles && !data.grid) {
-        const width = data.width || VIEW_W;
-        const height = data.height || VIEW_H;
-        const newGrid = Array(height)
-          .fill(0)
-          .map(() => Array(width).fill(0));
-
-        for (const [key, value] of Object.entries(data.tiles)) {
-          const [x, y] = key.split(",").map(Number);
-          if (y < height && x < width) {
-            newGrid[y][x] = value as number;
-          }
-        }
-
-        setChunks(gridToChunks(newGrid));
-      }
-      // Format mới (grid array)
-      else if (data.grid) {
-        setChunks(gridToChunks(data.grid));
-      }
-    } catch (e) {
-      console.error("Failed to load map:", e);
+      return;
+    }
+    if (hoveredChunkKey !== chunkKey) {
+      setHoveredChunkKey(chunkKey);
     }
   }
 
-  function clearMap() {
-    if (confirm("Xóa toàn bộ map?")) {
-      setChunks({});
-    }
+  function handleTilePointerDown(
+    event: React.PointerEvent<HTMLButtonElement>,
+    x: number,
+    y: number
+  ) {
+    if (event.button !== 0) return;
+    clickTileRef.current = { x, y };
   }
 
   function paint(x: number, y: number) {
-    const globalX = viewOrigin.x + x;
-    const globalY = viewOrigin.y + y;
-    const { cx, cy, lx, ly } = getChunkCoords(globalX, globalY);
-    const key = chunkKey(cx, cy);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    const chunkKey = makeChunkKey(cx, cy);
+    const owner = chunkOwners[chunkKey];
+    const isOwned = isOwnerMatch(owner);
+    setActiveChunkKey(chunkKey);
+    if (!isOwned) {
+      const ownerLabel = owner ? shortAddress(owner) : "no owner";
+      setNotice(`Chunk owned by ${ownerLabel}.`);
+      return;
+    }
+    setNotice(`Editing chunk (${cx}, ${cy}).`);
+    setIsChunkModalOpen(true);
+  }
 
-    setChunks((prev) => {
-      const existing = prev[key] ?? makeEmptyChunk();
-      const nextChunk = existing.map((row) => [...row]);
-      nextChunk[ly][lx] = selectedTile;
-      return { ...prev, [key]: nextChunk };
+  function closeChunkModal() {
+    setIsChunkModalOpen(false);
+  }
+
+  function paintModalTile(localX: number, localY: number) {
+    if (!activeChunkCoords || !canSaveActiveChunk) return;
+    const gx = activeChunkCoords.cx * CHUNK_SIZE + localX;
+    const gy = activeChunkCoords.cy * CHUNK_SIZE + localY;
+    setGrid((prev) => {
+      if (prev[gy]?.[gx] === selectedTile) return prev;
+      const copy = prev.map((row) => [...row]);
+      copy[gy][gx] = selectedTile;
+      return copy;
     });
   }
 
-  function saveMap() {
-    const pruned = Object.fromEntries(
-      Object.entries(chunks).filter(([, chunk]) => !isChunkEmpty(chunk))
+  function handleGridPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const wrap = gridWrapRef.current;
+    if (!wrap) return;
+    blockClickRef.current = false;
+    dragRef.current.active = true;
+    dragRef.current.moved = false;
+    dragRef.current.startX = event.clientX;
+    dragRef.current.startY = event.clientY;
+    dragRef.current.scrollLeft = wrap.scrollLeft;
+    dragRef.current.scrollTop = wrap.scrollTop;
+    wrap.setPointerCapture(event.pointerId);
+  }
+
+  function handleGridPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const wrap = gridWrapRef.current;
+    if (!wrap || !dragRef.current.active) return;
+
+    const dx = event.clientX - dragRef.current.startX;
+    const dy = event.clientY - dragRef.current.startY;
+    const movedEnough = Math.abs(dx) > 4 || Math.abs(dy) > 4;
+
+    if (!dragRef.current.moved && !movedEnough) return;
+
+    if (!dragRef.current.moved) {
+      dragRef.current.moved = true;
+      setIsDraggingGrid(true);
+    }
+
+    event.preventDefault();
+    wrap.scrollLeft = dragRef.current.scrollLeft - dx;
+    wrap.scrollTop = dragRef.current.scrollTop - dy;
+    blockClickRef.current = true;
+  }
+
+  function handleGridPointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    const wrap = gridWrapRef.current;
+    if (!dragRef.current.active) return;
+
+    dragRef.current.active = false;
+    if (wrap?.hasPointerCapture(event.pointerId)) {
+      wrap.releasePointerCapture(event.pointerId);
+    }
+
+    const shouldBlock = dragRef.current.moved;
+    const isCancel = event.type === "pointercancel";
+    const clickedTile = clickTileRef.current;
+    clickTileRef.current = null;
+    dragRef.current.moved = false;
+    setIsDraggingGrid(false);
+
+    if (!shouldBlock && !isCancel && clickedTile) {
+      paint(clickedTile.x, clickedTile.y);
+    }
+
+    if (shouldBlock) {
+      setTimeout(() => {
+        blockClickRef.current = false;
+      }, 0);
+    } else {
+      blockClickRef.current = false;
+    }
+  }
+
+  function handleGridPointerLeave(event: React.PointerEvent<HTMLDivElement>) {
+    handleGridPointerEnd(event);
+    setHoveredChunkKey("");
+    setHoveredChunkId("");
+    setIsHoverIdLoading(false);
+  }
+
+  /* ================= CHAIN IO ================= */
+
+  async function loadWorldId(): Promise<string> {
+    setChainError("");
+    if (!WORLD_REGISTRY_ID) {
+      setWorldId("");
+      return "";
+    }
+
+    try {
+      const result = await suiClient.getObject({
+        id: WORLD_REGISTRY_ID,
+        options: { showContent: true },
+      });
+
+      const content = result.data?.content;
+
+      if (!content || content.dataType !== "moveObject") {
+        setWorldId("");
+        return "";
+      }
+
+      const fields = normalizeMoveFields(content.fields);
+      const typeName = typeof content.type === "string" ? content.type : "";
+      if (typeName && !typeName.includes("WorldRegistry")) {
+        setChainError(`WORLD_REGISTRY_ID is ${typeName}, not WorldRegistry.`);
+      }
+
+      const worldField =
+        fields.world_id ?? fields.worldId ?? fields.world ?? undefined;
+      if (!worldField) {
+        setWorldId("");
+        return "";
+      }
+
+      const optionFields = normalizeMoveFields(worldField);
+      const vec = optionFields.vec;
+
+      const id = Array.isArray(vec) && vec.length > 0 ? String(vec[0]) : "";
+      setWorldId(id);
+      return id;
+    } catch (error) {
+      setChainError(error instanceof Error ? error.message : String(error));
+      setWorldId("");
+      return "";
+    }
+  }
+
+  async function refreshWorldAndMap() {
+    setMapLoadError("");
+    const override = worldOverride.trim();
+    const registryId = await loadWorldId();
+    await loadWorldList(registryId);
+    const targetId = override || registryId;
+    if (!targetId) {
+      setMapLoadError("World id missing.");
+      return;
+    }
+    await loadWorldMap(targetId);
+  }
+
+  async function loadWorldMap(targetWorldId: string) {
+    setMapLoadError("");
+    setIsMapLoading(true);
+    setLoadedChunks(null);
+    setActiveChunkKey("");
+
+    try {
+      const fieldEntries = await fetchAllDynamicFields(targetWorldId);
+      if (fieldEntries.length === 0) {
+        setNotice("World has no chunks yet.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkEntries = await resolveChunkEntries(
+        targetWorldId,
+        fieldEntries
+      );
+      if (chunkEntries.length === 0) {
+        setNotice("No chunk entries found.");
+        setLoadedChunks(0);
+        return;
+      }
+
+      const chunkIds = chunkEntries.map((entry) => entry.chunkId);
+      const chunkObjects = await suiClient.multiGetObjects({
+        ids: chunkIds,
+        options: { showContent: true, showOwner: true },
+      });
+
+      const maxCx = Math.max(...chunkEntries.map((entry) => entry.cx));
+      const maxCy = Math.max(...chunkEntries.map((entry) => entry.cy));
+      const width = (maxCx + 1) * CHUNK_SIZE;
+      const height = (maxCy + 1) * CHUNK_SIZE;
+
+      const newGrid = Array(height)
+        .fill(0)
+        .map(() => Array(width).fill(0));
+      const newOwners: ChunkOwners = {};
+
+      chunkEntries.forEach((entry, index) => {
+        const response = chunkObjects[index];
+        const content = response.data?.content;
+        if (!content || content.dataType !== "moveObject") return;
+        const fields = normalizeMoveFields(content.fields);
+        const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
+          clampU8(parseU32Value(tile) ?? 0, 8)
+        );
+
+        for (let y = 0; y < CHUNK_SIZE; y++) {
+          for (let x = 0; x < CHUNK_SIZE; x++) {
+            const idx = y * CHUNK_SIZE + x;
+            newGrid[entry.cy * CHUNK_SIZE + y][entry.cx * CHUNK_SIZE + x] =
+              tiles[idx] ?? 0;
+          }
+        }
+
+        const owner = extractOwnerAddress(response.data?.owner);
+        if (owner) {
+          newOwners[makeChunkKey(entry.cx, entry.cy)] = owner;
+        }
+      });
+
+      setGrid(newGrid);
+      setChunkOwners(newOwners);
+      setLoadedChunks(chunkEntries.length);
+      setNotice(`Loaded ${chunkEntries.length} chunks from chain.`);
+    } catch (error) {
+      setMapLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsMapLoading(false);
+    }
+  }
+
+  async function loadWorldList(registryId?: string) {
+    setWorldListError("");
+    setIsWorldListLoading(true);
+
+    try {
+      const ids = new Set<string>();
+      const regId = registryId ?? worldId;
+      if (regId) ids.add(regId);
+      const overrideId = worldOverride.trim();
+      if (overrideId) ids.add(overrideId);
+
+      if (PACKAGE_ID) {
+        const eventType = `${PACKAGE_ID}::world::WorldCreatedEvent`;
+        let cursor: string | null | undefined = null;
+        let hasNextPage = true;
+        let rounds = 0;
+
+        while (hasNextPage && rounds < 6) {
+          const page = await suiClient.queryEvents({
+            query: { MoveEventType: eventType },
+            cursor: cursor ?? undefined,
+            limit: 50,
+            order: "descending",
+          });
+
+          for (const event of page.data) {
+            const parsed = event.parsedJson;
+            if (!parsed || typeof parsed !== "object") continue;
+            const record = parsed as Record<string, unknown>;
+            const id =
+              typeof record.world_id === "string"
+                ? record.world_id
+                : typeof record.worldId === "string"
+                ? record.worldId
+                : "";
+            if (id) ids.add(id);
+          }
+
+          cursor = page.nextCursor ?? null;
+          hasNextPage = page.hasNextPage;
+          rounds += 1;
+        }
+      }
+
+      setWorldList([...ids]);
+    } catch (error) {
+      setWorldListError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsWorldListLoading(false);
+    }
+  }
+
+  async function fetchChunkObjectId(
+    cx: number,
+    cy: number,
+    options?: { silent?: boolean }
+  ) {
+    const silent = options?.silent ?? false;
+    if (!silent) setTxError("");
+    if (!PACKAGE_ID) {
+      if (!silent) setTxError("Missing package id.");
+      return "";
+    }
+    if (!worldIdValue) {
+      if (!silent) setTxError("World id missing.");
+      return "";
+    }
+
+    try {
+      const result = await suiClient.getDynamicFieldObject({
+        parentId: worldIdValue,
+        name: {
+          type: `${PACKAGE_ID}::world::ChunkKey`,
+          value: { cx, cy },
+        },
+      });
+
+      const content = result.data?.content;
+      if (!content || content.dataType !== "moveObject") {
+        if (!silent) setTxError("Chunk not found.");
+        return "";
+      }
+
+      const fields = content.fields as Record<string, unknown>;
+      const resolved = extractObjectId(fields.value);
+      if (!resolved) {
+        if (!silent) setTxError("Could not parse chunk id.");
+        return "";
+      }
+
+      return resolved;
+    } catch (error) {
+      if (!silent) {
+        setTxError(error instanceof Error ? error.message : String(error));
+      }
+      return "";
+    }
+  }
+
+  async function runTx(
+    label: string,
+    build: (tx: Transaction) => void,
+    onSuccess?: () => void
+  ) {
+    setTxError("");
+    setTxDigest("");
+
+    if (!isConnected) {
+      setTxError("Connect wallet first.");
+      return;
+    }
+
+    if (!PACKAGE_ID) {
+      setTxError("Missing package id.");
+      return;
+    }
+
+    setBusyAction(label);
+    try {
+      const tx = new Transaction();
+
+      build(tx);
+      const result = await signAndExecute({ transaction: tx });
+
+      setTxDigest(result.digest);
+      onSuccess?.();
+    } catch (error) {
+      setTxError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function createWorldOnChain() {
+    if (!WORLD_REGISTRY_ID || !ADMIN_CAP_ID) {
+      setTxError("Missing registry or admin cap id.");
+      return;
+    }
+
+    await runTx(
+      "Create world",
+      (tx) => {
+        tx.moveCall({
+          target: `${PACKAGE_ID}::world::create_world`,
+          arguments: [tx.object(WORLD_REGISTRY_ID), tx.object(ADMIN_CAP_ID)],
+        });
+      },
+      () => loadWorldId()
     );
-
-    const data = {
-      version: 2,
-      tileSize: TILE_SIZE,
-      chunkSize: CHUNK_SIZE,
-      chunks: pruned,
-    };
-
-    localStorage.setItem("CUSTOM_MAP", JSON.stringify(data));
-    alert("✅ Map saved!");
   }
 
-  function handleExpandChunk() {
-    if (!account) {
-      setTxStatus("Connect wallet first.");
-      return;
-    }
-    if (!walrusUri || !contentHash) {
-      setTxStatus("Walrus URI and content hash are required.");
-      return;
-    }
-    if (chunkCoord.x < 0 || chunkCoord.y < 0) {
-      setTxStatus("Chunk coordinates must be >= 0.");
+  async function claimChunkOnChain() {
+    console.log("Claim chunk on chain", worldIdValue, activeChunkKey);
+    if (!worldIdValue) {
+      setTxError("World id missing.");
       return;
     }
 
-    const tx = new Transaction();
-    const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(EXPAND_FEE_MIST)]);
-    tx.moveCall({
-      target: `${PACKAGE_ID}::${MODULE_NAME}::expand_chunk`,
-      arguments: [
-        tx.object(REGISTRY_ID),
-        tx.pure.u64(BigInt(chunkCoord.x)),
-        tx.pure.u64(BigInt(chunkCoord.y)),
-        tx.pure.vector("u8", encodeUtf8(walrusUri)),
-        tx.pure.vector("u8", encodeUtf8(contentHash)),
-        payment,
-      ],
-    });
+    // if (!activeChunkKey) {
+    //   setTxError("Select a chunk to use as tile template.");
+    //   return;
+    // }
 
-    setTxStatus("Submitting transaction...");
-    signAndExecuteTransaction(
-      { transaction: tx },
-      {
-        onSuccess: (result) => {
-          setTxStatus(`Success: ${result.digest}`);
-        },
-        onError: (error) => {
-          setTxStatus(error?.message ?? "Transaction failed.");
-        },
+    const [cxRaw, cyRaw] = activeChunkKey.split(",");
+    const cx = parseCoord(cxRaw ?? "0");
+    const cy = parseCoord(cyRaw ?? "0");
+    const tiles = buildChunkTiles(grid, cx, cy);
+    const imageUrl = claimImageUrl.trim();
+
+    await runTx(
+      "Claim chunk",
+      (tx) => {
+        tx.moveCall({
+          target: `${PACKAGE_ID}::world::claim_chunk`,
+          arguments: [
+            tx.object(worldIdValue),
+            tx.object(RANDOM_OBJECT_ID),
+            tx.pure.string(imageUrl),
+            tx.pure.vector("u8", tiles),
+          ],
+        });
+      },
+      () => refreshWorldAndMap()
+    );
+  }
+
+  async function saveActiveChunkOnChain() {
+    if (!activeChunkKey) {
+      setNotice("Select a chunk first.");
+      return;
+    }
+
+    const owner = chunkOwners[activeChunkKey];
+    if (!isOwnerMatch(owner)) {
+      setNotice(owner ? `Chunk owned by ${owner}.` : "Chunk has no owner.");
+      return;
+    }
+
+    const [cxRaw, cyRaw] = activeChunkKey.split(",");
+    const cx = parseCoord(cxRaw ?? "0");
+    const cy = parseCoord(cyRaw ?? "0");
+    const resolved = await fetchChunkObjectId(cx, cy);
+    if (!resolved) return;
+
+    const tiles = buildChunkTiles(grid, cx, cy);
+    await runTx(
+      "Save chunk",
+      (tx) => {
+        tx.moveCall({
+          target: `${PACKAGE_ID}::world::set_tiles`,
+          arguments: [tx.object(resolved), tx.pure.vector("u8", tiles)],
+        });
+      },
+      () => {
+        setNotice("Chunk saved on-chain.");
       }
     );
   }
 
-  function pan(dx: number, dy: number) {
-    setViewOrigin((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-  }
-
-  const visibleTiles = useMemo(() => {
-    return Array.from({ length: VIEW_H }, (_, y) =>
-      Array.from({ length: VIEW_W }, (_, x) => {
-        const gx = viewOrigin.x + x;
-        const gy = viewOrigin.y + y;
-        return { x, y, value: getTile(chunks, gx, gy) };
-      })
-    );
-  }, [chunks, viewOrigin]);
-
-  const viewChunk = useMemo(() => {
-    return {
-      x: Math.floor(viewOrigin.x / CHUNK_SIZE),
-      y: Math.floor(viewOrigin.y / CHUNK_SIZE),
-    };
-  }, [viewOrigin]);
-
-  const canSubmit =
-    !!account &&
-    walrusUri.length > 0 &&
-    contentHash.length > 0 &&
-    chunkCoord.x >= 0 &&
-    chunkCoord.y >= 0 &&
-    !isPending;
+  /* ================= UI ================= */
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>🗺️ MAP EDITOR</h2>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-        <div className="wallet-connect-btn">
-          <ConnectButton />
-        </div>
-        <div style={{ alignSelf: "center", fontSize: 12 }}>
-          {account ? `Wallet: ${account.address}` : "Wallet not connected"}
-        </div>
-      </div>
-
-      <div
-        style={{
-          border: "1px solid #333",
-          padding: 12,
-          marginBottom: 16,
-          maxWidth: 520,
-        }}
-      >
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>
-          Publish Chunk (On-Chain)
-        </div>
-        <div style={{ display: "grid", gap: 8 }}>
-          <label style={{ display: "grid", gap: 4 }}>
-            Chunk X (u64)
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={chunkCoord.x}
-              onChange={(event) =>
-                setChunkCoord((prev) => ({
-                  ...prev,
-                  x: Number(event.target.value),
-                }))
-              }
-            />
-          </label>
-          <label style={{ display: "grid", gap: 4 }}>
-            Chunk Y (u64)
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={chunkCoord.y}
-              onChange={(event) =>
-                setChunkCoord((prev) => ({
-                  ...prev,
-                  y: Number(event.target.value),
-                }))
-              }
-            />
-          </label>
-          <label style={{ display: "grid", gap: 4 }}>
-            Walrus URI
-            <input
-              type="text"
-              value={walrusUri}
-              onChange={(event) => setWalrusUri(event.target.value)}
-              placeholder="walrus://..."
-            />
-          </label>
-          <label style={{ display: "grid", gap: 4 }}>
-            Content Hash
-            <input
-              type="text"
-              value={contentHash}
-              onChange={(event) => setContentHash(event.target.value)}
-              placeholder="sha256..."
-            />
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => setChunkCoord(viewChunk)}
-              disabled={viewChunk.x < 0 || viewChunk.y < 0}
-            >
-              Use View Chunk
-            </button>
-            <button
-              type="button"
-              onClick={handleExpandChunk}
-              disabled={!canSubmit}
-            >
-              {isPending ? "Submitting..." : "Pay 1.3 SUI and Add Chunk"}
-            </button>
+    <div className="editor-page">
+      <div className="editor-shell">
+        <header className="editor-header">
+          <div>
+            <div className="editor-eyebrow">Skyworld editor</div>
+            <h1 className="editor-title">Stone chunk workshop</h1>
+            <p className="editor-subtitle">
+              Carve floating chunks and push updates on-chain.
+            </p>
           </div>
-          {txStatus ? (
-            <div style={{ fontSize: 12, color: "#cbd5f5" }}>{txStatus}</div>
-          ) : null}
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>
-            Chunk coordinates use chunk space (16x16 tiles) and must be lon hon
-            0.
+
+          <div className="editor-wallet">
+            <div className="wallet-connect-btn">
+              <ConnectButton />
+            </div>
+            <div className="wallet-meta">
+              <span>Wallet</span>
+              <span>{shortAddress(account?.address) || "not connected"}</span>
+            </div>
           </div>
+        </header>
+
+        <div className="editor-layout">
+          <aside className="editor-left">
+            <div className="panel">
+              <div className="panel__title">Map info</div>
+              <div className="panel__meta">
+                <div>
+                  Size: {gridWidth} x {gridHeight}
+                </div>
+                <div>Editing: {activeChunkLabel}</div>
+              </div>
+
+              <div className="panel__rows">
+                <div>
+                  <span>Hover chunk</span>
+                  <span>{hoveredChunkLabel}</span>
+                </div>
+                <div>
+                  <span>Chunk id</span>
+                  <span
+                    className="panel__value panel__value--wrap"
+                    title={hoveredChunkId || ""}
+                  >
+                    {hoveredChunkIdDisplay}
+                  </span>
+                </div>
+              </div>
+
+              <p className="panel__desc">
+                Hover your chunk to preview the id, click to edit in a modal.
+              </p>
+
+              {notice && <div className="panel__notice">{notice}</div>}
+            </div>
+
+            <div className="panel">
+              <div className="panel__title">Tiles</div>
+              <div className="editor-tiles">
+                {Object.entries(TILE_COLORS).map(([id, color]) => (
+                  <TileButton
+                    key={id}
+                    label={id}
+                    color={color}
+                    active={selectedTile === Number(id)}
+                    onClick={() => setSelectedTile(Number(id))}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel__title">Game</div>
+              <div className="editor-actions">
+                <button
+                  className="btn btn--dark"
+                  onClick={() => navigate("/game")}
+                >
+                  Play
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <section className="editor-main">
+            <div className="panel panel--main">
+              <div className="panel__eyebrow">Stone canvas</div>
+              <div className="panel__title">Chunk grid</div>
+
+              <div
+                ref={gridWrapRef}
+                className={`editor-grid-wrap ${
+                  isDraggingGrid ? "is-dragging" : ""
+                }`}
+                onPointerDown={handleGridPointerDown}
+                onPointerMove={handleGridPointerMove}
+                onPointerUp={handleGridPointerEnd}
+                onPointerLeave={handleGridPointerLeave}
+                onPointerCancel={handleGridPointerEnd}
+              >
+                <div
+                  className="editor-grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${gridWidth}, ${TILE_SIZE}px)`,
+                    width: gridWidth * TILE_SIZE,
+                  }}
+                >
+                  {grid.map((row, y) =>
+                    row.map((cell, x) => {
+                      const chunkKey = getChunkKeyFromTile(x, y);
+                      const owner = chunkOwners[chunkKey];
+                      const isOwned = isOwnerMatch(owner);
+                      const isSelected = isOwned && chunkKey === activeChunkKey;
+                      const isLocked =
+                        isChunkModalOpen &&
+                        Boolean(activeChunkKey) &&
+                        chunkKey !== activeChunkKey;
+                      const isHovered = isOwned && chunkKey === hoveredChunkKey;
+
+                      return (
+                        <button
+                          key={`${x}-${y}`}
+                          className={`editor-tile ${
+                            isOwned ? "is-owned" : ""
+                          } ${isSelected ? "is-selected" : ""} ${
+                            isLocked ? "is-locked" : ""
+                          } ${isHovered ? "is-hovered" : ""}`}
+                          onPointerDown={(event) =>
+                            handleTilePointerDown(event, x, y)
+                          }
+                          onPointerEnter={() =>
+                            handleTilePointerEnter(chunkKey, isOwned)
+                          }
+                          title={`Owner: ${owner ?? "none"}`}
+                          style={{
+                            background: TILE_COLORS[cell],
+                            cursor: "pointer",
+                          }}
+                        />
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside className="editor-side">
+            <div className="panel">
+              <div className="panel__title">Chain config</div>
+              <div className="panel__rows">
+                <div>
+                  <span>RPC</span>
+                  <span>{shortAddress(SUI_RPC_URL) || "not set"}</span>
+                </div>
+                <div>
+                  <span>Package</span>
+                  <span>{shortAddress(PACKAGE_ID) || "missing"}</span>
+                </div>
+                <div>
+                  <span>Admin cap</span>
+                  <span>{shortAddress(ADMIN_CAP_ID) || "missing"}</span>
+                </div>
+                <div>
+                  <span>Registry</span>
+                  <span>{shortAddress(WORLD_REGISTRY_ID) || "missing"}</span>
+                </div>
+                <div>
+                  <span>World</span>
+                  <span>{shortAddress(worldId) || "not created"}</span>
+                </div>
+                <div>
+                  <span>Chunks</span>
+                  <span>{loadedChunks === null ? "-" : loadedChunks}</span>
+                </div>
+              </div>
+
+              <div className="panel__field">
+                <label>World list</label>
+                <select
+                  value={worldOverride}
+                  onChange={(event) => setWorldOverride(event.target.value)}
+                  disabled={isWorldListLoading}
+                >
+                  <option value="">
+                    {worldId
+                      ? `Use registry (${shortAddress(worldId)})`
+                      : "Use registry (empty)"}
+                  </option>
+                  {worldListOptions.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="panel__field">
+                <label>World override</label>
+                <input
+                  value={worldOverride}
+                  onChange={(event) => setWorldOverride(event.target.value)}
+                  placeholder="0x..."
+                />
+              </div>
+
+              <div className="panel__actions">
+                <button
+                  className="btn btn--ghost"
+                  onClick={refreshWorldAndMap}
+                  disabled={isMapLoading}
+                >
+                  {isMapLoading ? "Loading map..." : "Refresh world"}
+                </button>
+              </div>
+
+              {chainError && <div className="panel__error">{chainError}</div>}
+              {worldListError && (
+                <div className="panel__error">{worldListError}</div>
+              )}
+              {mapLoadError && (
+                <div className="panel__error">{mapLoadError}</div>
+              )}
+            </div>
+
+            <div className="panel">
+              <div className="panel__title">World admin</div>
+              <p className="panel__desc">
+                Create the shared world object using the admin cap.
+              </p>
+              <button
+                className="btn btn--primary"
+                onClick={createWorldOnChain}
+                disabled={isBusy || !isConnected}
+              >
+                {busyAction === "Create world" ? "Creating..." : "Create world"}
+              </button>
+            </div>
+
+            <div className="panel">
+              <div className="panel__title">Claim chunk</div>
+              <p className="panel__desc">
+                Uses tiles from the selected chunk. Location is random but must
+                touch existing chunks.
+              </p>
+              <div className="panel__rows">
+                <div>
+                  <span>Selected chunk</span>
+                  <span>{activeChunkLabel}</span>
+                </div>
+              </div>
+              <div className="panel__field">
+                <label>Image URL</label>
+                <input
+                  value={claimImageUrl}
+                  onChange={(event) => setClaimImageUrl(event.target.value)}
+                  placeholder="https://..."
+                />
+              </div>
+              <button
+                className="btn btn--dark"
+                onClick={claimChunkOnChain}
+                disabled={isBusy || !isConnected}
+              >
+                {busyAction === "Claim chunk" ? "Claiming..." : "Claim chunk"}
+              </button>
+            </div>
+
+            <div className="panel panel--status">
+              <div className="panel__title">Transaction status</div>
+              <div className="panel__rows">
+                <div>
+                  <span>Wallet</span>
+                  <span>
+                    {shortAddress(account?.address) || "not connected"}
+                  </span>
+                </div>
+                <div>
+                  <span>Action</span>
+                  <span>{busyAction || "idle"}</span>
+                </div>
+                <div>
+                  <span>Digest</span>
+                  <span>{txDigest || "-"}</span>
+                </div>
+              </div>
+              {txError && <div className="panel__error">{txError}</div>}
+            </div>
+          </aside>
         </div>
-      </div>
 
-      {/* TOOLBAR */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-        <TileButton
-          label="Empty"
-          color={TILE_COLORS[0]}
-          active={selectedTile === 0}
-          onClick={() => setSelectedTile(0)}
-        />
-        <TileButton
-          label="Wall"
-          color={TILE_COLORS[1]}
-          active={selectedTile === 1}
-          onClick={() => setSelectedTile(1)}
-        />
-        <TileButton
-          label="Trap"
-          color={TILE_COLORS[2]}
-          active={selectedTile === 2}
-          onClick={() => setSelectedTile(2)}
-        />
-        <TileButton
-          label="Floor 1"
-          color={TILE_COLORS[5]}
-          active={selectedTile === 5}
-          onClick={() => setSelectedTile(5)}
-        />
-        <TileButton
-          label="Floor 2"
-          color={TILE_COLORS[6]}
-          active={selectedTile === 6}
-          onClick={() => setSelectedTile(6)}
-        />
-        <TileButton
-          label="Floor 3"
-          color={TILE_COLORS[7]}
-          active={selectedTile === 7}
-          onClick={() => setSelectedTile(7)}
-        />
-        <TileButton
-          label="Floor 4"
-          color={TILE_COLORS[8]}
-          active={selectedTile === 8}
-          onClick={() => setSelectedTile(8)}
-        />
-        <TileButton
-          label="Enemy"
-          color={TILE_COLORS[4]}
-          active={selectedTile === 4}
-          onClick={() => setSelectedTile(4)}
-        />
-      </div>
-
-      {/* VIEWPORT CONTROLS */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={() => pan(0, -1)}>⬆</button>
-        <button onClick={() => pan(-1, 0)}>⬅</button>
-        <button onClick={() => pan(1, 0)}>➡</button>
-        <button onClick={() => pan(0, 1)}>⬇</button>
-        <button onClick={() => setViewOrigin({ x: 0, y: 0 })}>
-          Reset View
-        </button>
-        <span style={{ alignSelf: "center", marginLeft: 8 }}>
-          View: ({viewOrigin.x}, {viewOrigin.y})
-        </span>
-      </div>
-
-      {/* GRID */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(${VIEW_W}, ${TILE_SIZE}px)`,
-          border: "2px solid #555",
-          width: VIEW_W * TILE_SIZE,
-        }}
-      >
-        {visibleTiles.map((row, y) =>
-          row.map((cell, x) => (
+        {isChunkModalOpen && activeChunkCoords && (
+          <div className="editor-modal">
+            <div className="editor-modal__backdrop" onClick={closeChunkModal} />
             <div
-              key={`${x}-${y}`}
-              onClick={() => paint(x, y)}
-              style={{
-                width: TILE_SIZE,
-                height: TILE_SIZE,
-                background: TILE_COLORS[cell.value],
-                border: "1px solid #333",
-                cursor: "pointer",
-              }}
-            />
-          ))
-        )}
-      </div>
+              className="editor-modal__panel"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Chunk editor"
+            >
+              <div className="editor-modal__header">
+                <div>
+                  <div className="panel__eyebrow">Chunk editor</div>
+                  <div className="editor-modal__title">
+                    Chunk {activeChunkLabel}
+                  </div>
+                </div>
+                <button
+                  className="btn btn--outline editor-modal__close"
+                  onClick={closeChunkModal}
+                >
+                  Close
+                </button>
+              </div>
 
-      {/* ACTIONS */}
-      <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
-        <button onClick={saveMap}>💾 Save</button>
-        <button onClick={loadMap}>📂 Load</button>
-        <button onClick={clearMap}>🗑️ Clear</button>
-        <button onClick={() => navigate("/game")}>▶ Play</button>
+              {notice && <div className="panel__notice">{notice}</div>}
+
+              <div className="panel__rows">
+                <div>
+                  <span>Chunk id</span>
+                  <span
+                    className="panel__value panel__value--wrap"
+                    title={activeChunkIdDisplay}
+                  >
+                    {activeChunkIdDisplay}
+                  </span>
+                </div>
+              </div>
+
+              <div className="editor-modal__body">
+                <div className="editor-modal__canvas">
+                  <div
+                    className="editor-chunk-grid"
+                    style={{
+                      gridTemplateColumns: `repeat(${CHUNK_SIZE}, ${TILE_SIZE}px)`,
+                    }}
+                  >
+                    {Array.from({ length: CHUNK_SIZE }, (_, y) =>
+                      Array.from({ length: CHUNK_SIZE }, (_, x) => {
+                        const gx = activeChunkCoords.cx * CHUNK_SIZE + x;
+                        const gy = activeChunkCoords.cy * CHUNK_SIZE + y;
+                        const cell = grid[gy]?.[gx] ?? 0;
+
+                        return (
+                          <button
+                            key={`${x}-${y}`}
+                            className="editor-tile editor-tile--chunk"
+                            onClick={() => paintModalTile(x, y)}
+                            style={{
+                              background: TILE_COLORS[cell],
+                              cursor: "pointer",
+                            }}
+                          />
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div className="editor-modal__tiles">
+                  <div className="panel__title">Tiles</div>
+                  <div className="editor-tiles">
+                    {Object.entries(TILE_COLORS).map(([id, color]) => (
+                      <TileButton
+                        key={id}
+                        label={id}
+                        color={color}
+                        active={selectedTile === Number(id)}
+                        onClick={() => setSelectedTile(Number(id))}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="editor-modal__actions">
+                <button
+                  className="btn btn--primary"
+                  onClick={saveActiveChunkOnChain}
+                  disabled={isBusy || !isConnected || !canSaveActiveChunk}
+                >
+                  {busyAction === "Save chunk" ? "Saving..." : "Save chunk"}
+                </button>
+                <button className="btn btn--outline" onClick={closeChunkModal}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+/* ================= HELPERS ================= */
+
+function getOrCreateUserId() {
+  const stored = localStorage.getItem(USER_ID_KEY);
+  if (stored) return stored;
+  const generated = `user_${Math.random().toString(36).slice(2, 8)}`;
+  localStorage.setItem(USER_ID_KEY, generated);
+  return generated;
+}
+
+function makeChunkKey(cx: number, cy: number) {
+  return `${cx},${cy}`;
+}
+
+function getChunkKeyFromTile(x: number, y: number) {
+  const cx = Math.floor(x / CHUNK_SIZE);
+  const cy = Math.floor(y / CHUNK_SIZE);
+  return makeChunkKey(cx, cy);
+}
+
+function getChunkOwnerAt(owners: ChunkOwners, x: number, y: number) {
+  return owners[getChunkKeyFromTile(x, y)];
+}
+
+function createOwnersForGrid(grid: number[][], ownerId: string): ChunkOwners {
+  const owners: ChunkOwners = {};
+  if (grid.length === 0 || grid[0].length === 0) return owners;
+
+  const cols = Math.ceil(grid[0].length / CHUNK_SIZE);
+  const rows = Math.ceil(grid.length / CHUNK_SIZE);
+
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      owners[makeChunkKey(cx, cy)] = ownerId;
+    }
+  }
+
+  return owners;
+}
+
+function createDefaultGrid() {
+  return Array(CHUNK_SIZE)
+    .fill(0)
+    .map(() => Array(CHUNK_SIZE).fill(DEFAULT_FLOOR));
+}
+
+function buildChunkTiles(grid: number[][], cx: number, cy: number) {
+  const tiles: number[] = [];
+  const startX = cx * CHUNK_SIZE;
+  const startY = cy * CHUNK_SIZE;
+
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      const value = grid[startY + y]?.[startX + x];
+      tiles.push(typeof value === "number" ? value : 0);
+    }
+  }
+
+  return tiles;
+}
+
+function parseCoord(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function clampU8(value: number, max: number) {
+  const clamped = Math.max(0, Math.min(max, value));
+  return Number.isFinite(clamped) ? clamped : 0;
+}
+
+function extractObjectId(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.id === "string") return record.id;
+  if (record.id && typeof record.id === "object") {
+    const nested = record.id as Record<string, unknown>;
+    if (typeof nested.id === "string") return nested.id;
+  }
+  if (record.fields && typeof record.fields === "object") {
+    const fields = record.fields as Record<string, unknown>;
+    if (typeof fields.id === "string") return fields.id;
+    if (fields.id && typeof fields.id === "object") {
+      const nested = fields.id as Record<string, unknown>;
+      if (typeof nested.id === "string") return nested.id;
+    }
+  }
+
+  return "";
+}
+
+function shortAddress(value?: string) {
+  if (!value) return "";
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function normalizeMoveFields(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  if (record.fields && typeof record.fields === "object") {
+    return record.fields as Record<string, unknown>;
+  }
+  return record;
+}
+
+function normalizeMoveVector(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const fields = normalizeMoveFields(value);
+  if (Array.isArray(fields.vec)) return fields.vec;
+  return [];
+}
+
+function parseU32Value(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+}
+
+function extractChunkCoords(value: unknown): { cx: number; cy: number } | null {
+  const fields = normalizeMoveFields(value);
+  const cx = parseU32Value(fields.cx);
+  const cy = parseU32Value(fields.cy);
+  if (cx === null || cy === null) return null;
+  return { cx, cy };
+}
+
+function extractOwnerAddress(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.AddressOwner === "string") return record.AddressOwner;
+  if (typeof record.ObjectOwner === "string") return record.ObjectOwner;
+  if (
+    record.ConsensusAddressOwner &&
+    typeof record.ConsensusAddressOwner === "object"
+  ) {
+    const inner = record.ConsensusAddressOwner as Record<string, unknown>;
+    if (typeof inner.owner === "string") return inner.owner;
+  }
+  return "";
+}
+
+async function fetchAllDynamicFields(parentId: string) {
+  const all: Array<{ name: { type?: string; value?: unknown } }> = [];
+  let cursor: string | null | undefined = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const page = await suiClient.getDynamicFields({
+      parentId,
+      cursor: cursor ?? undefined,
+      limit: 50,
+    });
+    all.push(...page.data);
+    cursor = page.nextCursor ?? null;
+    hasNextPage = page.hasNextPage;
+  }
+
+  return all;
+}
+
+async function resolveChunkEntries(
+  worldId: string,
+  fields: Array<{ name: { type?: string; value?: unknown } }>
+) {
+  const results = await Promise.allSettled(
+    fields.map(async (field) => {
+      if (field.name?.type && !field.name.type.includes("ChunkKey")) {
+        return null;
+      }
+      const coords = extractChunkCoords(field.name?.value);
+      if (!coords) return null;
+
+      const fieldObject = await suiClient.getDynamicFieldObject({
+        parentId: worldId,
+        name: field.name,
+      });
+      const content = fieldObject.data?.content;
+      if (!content || content.dataType !== "moveObject") return null;
+      const fieldFields = normalizeMoveFields(content.fields);
+      const chunkId = extractObjectId(fieldFields.value);
+      if (!chunkId) return null;
+      return { ...coords, chunkId };
+    })
+  );
+
+  return results
+    .filter(
+      (
+        result
+      ): result is PromiseFulfilledResult<{
+        cx: number;
+        cy: number;
+        chunkId: string;
+      }> => result.status === "fulfilled"
+    )
+    .map((result) => result.value)
+    .filter((entry): entry is { cx: number; cy: number; chunkId: string } =>
+      Boolean(entry)
+    );
+}
+
+/* ================= TILE BUTTON ================= */
 
 function TileButton({
   label,
@@ -481,13 +1292,8 @@ function TileButton({
   return (
     <button
       onClick={onClick}
-      style={{
-        padding: "6px 12px",
-        border: active ? "2px solid #fff" : "2px solid transparent",
-        background: color,
-        color: "#000",
-        cursor: "pointer",
-      }}
+      className={`tile-button ${active ? "tile-button--active" : ""}`}
+      style={{ background: color }}
     >
       {label}
     </button>

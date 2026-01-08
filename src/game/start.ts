@@ -4,10 +4,13 @@ import kaboom, { GameObj } from "kaboom";
 let started = false;
 const TILE = 32;
 const CHUNK_SIZE = 16;
+const PLAY_STATE_KEY = "PLAY_STATE";
+const PLAY_TARGET_KEY = "PLAY_TARGET";
 
 type GameMapData = {
   tileSize: number;
   grid: number[][];
+  worldId?: string;
 };
 
 export function startGame(mapData?: GameMapData) {
@@ -31,9 +34,9 @@ export function startGame(mapData?: GameMapData) {
   /* ================= SPRITES ================= */
 
   loadSprite("player-idle", "/sprites/player/Idle.png", {
-    sliceX: 4,
+    sliceX: 8,
     anims: {
-      idle: { from: 0, to: 3, speed: 6, loop: true },
+      idle: { from: 0, to: 0, speed: 7, loop: true },
     },
   });
 
@@ -45,9 +48,9 @@ export function startGame(mapData?: GameMapData) {
   });
 
   loadSprite("player-attack", "/sprites/player/Attack.png", {
-    sliceX: 6,
+    sliceX: 4,
     anims: {
-      attack: { from: 0, to: 5, speed: 12 },
+      attack: { from: 0, to: 3, speed: 12 },
     },
   });
 
@@ -124,8 +127,44 @@ export function startGame(mapData?: GameMapData) {
         facing: 1, // 1 right, -1 left
         attacking: false,
       },
+      scale(0.5),
       "player",
     ]);
+
+    const playTarget = loadPlayTarget();
+    const playState = loadPlayState();
+    const worldMatch =
+      !playTarget?.worldId ||
+      !resolvedMap.worldId ||
+      playTarget.worldId === resolvedMap.worldId;
+    if (
+      playTarget &&
+      worldMatch &&
+      !playTarget.found &&
+      Number.isFinite(playTarget.x) &&
+      Number.isFinite(playTarget.y) &&
+      resolvedMap.grid[playTarget.y]?.[playTarget.x] >= 5
+    ) {
+      const keyPos = vec2(
+        playTarget.x * tileSize + tileSize / 2,
+        playTarget.y * tileSize + tileSize / 2
+      );
+      const keyObj = add([
+        rect(tileSize * 0.6, tileSize * 0.6),
+        pos(keyPos),
+        area(),
+        anchor("center"),
+        color(250, 210, 72),
+        "key",
+      ]);
+      let keyFound = false;
+      player.onCollide("key", () => {
+        if (keyFound) return;
+        keyFound = true;
+        keyObj.destroy();
+        markKeyFound(playTarget, playState?.playId);
+      });
+    }
 
     onUpdate(() => camPos(player.pos));
 
@@ -223,4 +262,41 @@ export function startGame(mapData?: GameMapData) {
   } else {
     go("game");
   }
+}
+
+function loadPlayState(): { playId?: string } | null {
+  const raw = localStorage.getItem(PLAY_STATE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+function loadPlayTarget(): {
+  x: number;
+  y: number;
+  found?: boolean;
+  worldId?: string;
+} | null {
+  const raw = localStorage.getItem(PLAY_TARGET_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+function markKeyFound(target: { x: number; y: number }, playId?: string) {
+  localStorage.setItem(
+    PLAY_TARGET_KEY,
+    JSON.stringify({ ...target, found: true })
+  );
+  window.dispatchEvent(
+    new CustomEvent("game:key-found", { detail: { playId } })
+  );
 }

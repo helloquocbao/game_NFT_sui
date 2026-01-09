@@ -17,6 +17,7 @@ import {
 } from "../chain/config";
 import { suiClient } from "../chain/suiClient";
 import { startGame } from "../game/start";
+import { isWalkableTile, normalizeTileId } from "../game/tiles";
 import "./GamePage.css";
 
 const TILE_SIZE = 32;
@@ -303,7 +304,7 @@ export default function GamePage() {
         if (!content || content.dataType !== "moveObject") return;
         const fields = normalizeMoveFields(content.fields);
         const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
-          clampU8(parseU32Value(tile) ?? 0, 8)
+          normalizeTileId(clampU8(parseU32Value(tile) ?? 0, 255))
         );
 
         for (let y = 0; y < CHUNK_SIZE; y++) {
@@ -342,7 +343,7 @@ export default function GamePage() {
       for (let y = 0; y < grid.length; y += 1) {
         const row = grid[y] ?? [];
         for (let x = 0; x < row.length; x += 1) {
-          if (Number(row[x]) >= 5) {
+          if (isWalkableTile(Number(row[x]))) {
             floors.push({ x, y });
           }
         }

@@ -1,5 +1,12 @@
 /// <reference types="kaboom/global" />
 import kaboom, { GameObj } from "kaboom";
+import {
+  TILE_DEFS,
+  TILE_SPRITE_SIZE,
+  getTileDef,
+  isTileDefined,
+  isWalkableTile,
+} from "./tiles";
 
 let started = false;
 const TILE = 32;
@@ -55,6 +62,10 @@ export function startGame(mapData?: GameMapData) {
     },
   });
 
+  TILE_DEFS.forEach((tile) => {
+    loadSprite(tile.name, tile.image);
+  });
+
   /* ================= MAP ================= */
 
   function loadMap(): GameMapData | null {
@@ -69,28 +80,33 @@ export function startGame(mapData?: GameMapData) {
     }
   }
 
-  function gridToLevel(grid: number[][]) {
-    return grid.map((row) =>
-      row
-        .map((c) => {
-          if (c === 1) return "#";
-          if (c === 2) return "^";
-          if (c >= 5) return "=";
-          return ".";
-        })
-        .join("")
-    );
-  }
-
   function findSpawn(grid: number[][], size: number) {
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] >= 5) {
+        if (isWalkableTile(grid[y][x])) {
           return vec2(x * size + size / 2, y * size + size / 2);
         }
       }
     }
     return vec2(64, 64);
+  }
+
+  function drawTiles(grid: number[][], tileSize: number) {
+    const scaleFactor = tileSize / TILE_SPRITE_SIZE;
+    for (let y = 0; y < grid.length; y++) {
+      for (let x = 0; x < grid[y].length; x++) {
+        const tileId = grid[y][x];
+        const tileDef = getTileDef(tileId);
+        if (!tileDef) continue;
+        add([
+          sprite(tileDef.name),
+          pos(x * tileSize, y * tileSize),
+          anchor("topleft"),
+          scale(scaleFactor),
+          tileDef.kind === "abyssWall" ? "abyss-wall" : "ground",
+        ]);
+      }
+    }
   }
 
   /* ================= SCENE ================= */
@@ -104,17 +120,7 @@ export function startGame(mapData?: GameMapData) {
 
     const tileSize = resolvedMap.tileSize || TILE;
     const spawnPos = findSpawn(resolvedMap.grid, tileSize);
-    const level = gridToLevel(resolvedMap.grid);
-
-    addLevel(level, {
-      tileWidth: tileSize,
-      tileHeight: tileSize,
-      tiles: {
-        "#": () => [rect(TILE, TILE), area(), color(120, 120, 120), "wall"],
-        "^": () => [rect(TILE, TILE), area(), color(255, 0, 0), "trap"],
-        "=": () => [rect(TILE, TILE), "floor"],
-      },
-    });
+    drawTiles(resolvedMap.grid, tileSize);
 
     /* ================= PLAYER ================= */
 
@@ -144,7 +150,7 @@ export function startGame(mapData?: GameMapData) {
       !playTarget.found &&
       Number.isFinite(playTarget.x) &&
       Number.isFinite(playTarget.y) &&
-      resolvedMap.grid[playTarget.y]?.[playTarget.x] >= 5
+      isWalkableTile(resolvedMap.grid[playTarget.y]?.[playTarget.x] ?? 0)
     ) {
       const keyPos = vec2(
         playTarget.x * tileSize + tileSize / 2,
@@ -172,6 +178,13 @@ export function startGame(mapData?: GameMapData) {
     /* ================= INPUT STATE ================= */
 
     let moveDir = vec2(0, 0);
+    let isFalling = false;
+
+    function handleFallDeath() {
+      if (isFalling) return;
+      isFalling = true;
+      go("game", { mapData: resolvedMap });
+    }
 
     onKeyDown("a", () => {
       moveDir.x = -1;
@@ -188,10 +201,20 @@ export function startGame(mapData?: GameMapData) {
 
     /* ================= MOVE ================= */
 
-    function canMove(pos: Vec2) {
+    function getTileIdAt(pos: Vec2) {
       const x = Math.floor(pos.x / tileSize);
       const y = Math.floor(pos.y / tileSize);
-      return resolvedMap.grid[y]?.[x] >= 5;
+      if (y < 0 || y >= resolvedMap.grid.length) return null;
+      if (x < 0 || x >= (resolvedMap.grid[y]?.length ?? 0)) return null;
+      const value = resolvedMap.grid[y]?.[x];
+      return typeof value === "number" ? value : null;
+    }
+
+    function canMove(pos: Vec2) {
+      const tileId = getTileIdAt(pos);
+      if (tileId === null) return true;
+      if (!isTileDefined(tileId)) return true;
+      return isWalkableTile(tileId);
     }
 
     /* ================= ATTACK ================= */
@@ -233,6 +256,12 @@ export function startGame(mapData?: GameMapData) {
       }
 
       /* ---- FLIP (1 nơi duy nhất) ---- */
+      const currentTile = getTileIdAt(player.pos);
+      if (currentTile === null || !isTileDefined(currentTile)) {
+        handleFallDeath();
+        return;
+      }
+
       player.flipX = player.facing === -1;
 
       /* ---- ANIMATION FSM ---- */

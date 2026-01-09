@@ -121,7 +121,7 @@ export function startGame(mapData?: GameMapData) {
     const player = add([
       sprite("player-idle", { anim: "idle" }),
       pos(spawnPos),
-      area(),
+      area({ shape: new Rect(vec2(0), 65, 70) }),
       anchor("center"),
       {
         speed: 200,

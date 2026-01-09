@@ -1,10 +1,15 @@
 module chunk_world::world {
 
+    use std::hash;
     use std::string::{Self, String};
 
     use sui::dynamic_field as df;
     use sui::event;
+    use sui::coin::{Self, Coin};
     use sui::random;
+
+    use chunk_world::reward_coin;
+    use chunk_world::reward_coin::RewardVault;
 
     // NFT Display
     use sui::package;
@@ -17,6 +22,9 @@ module chunk_world::world {
     const MAX_URL_BYTES: u64 = 2048;
 
     const U32_MAX: u32 = 4294967295;
+    const PLAY_FEE: u64 = 5;
+    const MIN_REWARD: u64 = 2;
+    const MAX_REWARD: u64 = 15;
 
     /* ================= ERRORS ================= */
 
@@ -28,6 +36,10 @@ module chunk_world::world {
     const E_CHUNK_ALREADY_EXISTS: u64 = 5;
     const E_FIRST_CHUNK_MUST_BE_ORIGIN: u64 = 6;
     const E_NO_ADJACENT_CHUNK: u64 = 7;
+    const E_INVALID_FEE: u64 = 8;
+    const E_INVALID_REWARD_RANGE: u64 = 9;
+    const E_PLAY_NOT_FOUND: u64 = 10;
+    const E_INVALID_SEAL: u64 = 11;
 
     /* ================= ADMIN / REGISTRY ================= */
 
@@ -50,9 +62,21 @@ module chunk_world::world {
         cy: u32,
     }
 
+    /// Key cho dynamic field: play_id -> PlayTicket
+    public struct PlayKey has copy, drop, store {
+        id: u64,
+    }
+
+    public struct PlayTicket has store {
+        seal: vector<u8>,
+        min_reward: u64,
+        max_reward: u64,
+    }
+
     public struct WorldMap has key, store {
         id: UID,
         chunk_count: u64,
+        next_play_id: u64,
         admin: address,
         chunks: vector<ChunkKey>,
     }
@@ -99,6 +123,21 @@ module chunk_world::world {
 
     public struct ChunkImageUpdatedEvent has copy, drop {
         chunk_id: ID,
+    }
+
+    public struct PlayCreatedEvent has copy, drop {
+        world_id: ID,
+        play_id: u64,
+        min_reward: u64,
+        max_reward: u64,
+        creator: address,
+    }
+
+    public struct RewardClaimedEvent has copy, drop {
+        world_id: ID,
+        play_id: u64,
+        reward: u64,
+        recipient: address,
     }
 
     /* ================= DISPLAY INIT (làm đẹp NFT) ================= */
@@ -173,6 +212,7 @@ module chunk_world::world {
         let world = WorldMap {
             id: object::new(ctx),
             chunk_count: 0,
+            next_play_id: 0,
             admin,
             chunks: vector[],
         };
@@ -241,6 +281,75 @@ module chunk_world::world {
         event::emit(ChunkClaimedEvent { world_id, chunk_id, cx, cy, owner: sender });
 
         transfer::public_transfer(chunk, sender);
+    }
+
+    /* ================= GAME: PLAY / REWARD ================= */
+
+    /// seal = hash::sha3_256(key_bytes) (compute off-chain)
+     entry fun play(
+        world: &mut WorldMap,
+        vault: &mut RewardVault,
+        mut fee_coin: Coin<reward_coin::REWARD_COIN>,
+        seal: vector<u8>,
+        ctx: &mut TxContext
+    ) {
+        assert!(vector::length(&seal) > 0, E_INVALID_SEAL);
+        assert!(MAX_REWARD >= MIN_REWARD && MIN_REWARD > 0, E_INVALID_REWARD_RANGE);
+
+        let fee_value = coin::value(&fee_coin);
+        assert!(fee_value >= PLAY_FEE, E_INVALID_FEE);
+
+        let sender = tx_context::sender(ctx);
+        if (fee_value > PLAY_FEE) {
+            let pay_coin = coin::split(&mut fee_coin, PLAY_FEE, ctx);
+            reward_coin::deposit(vault, pay_coin);
+            transfer::public_transfer(fee_coin, sender);
+        } else {
+            reward_coin::deposit(vault, fee_coin);
+        };
+
+        reward_coin::reserve(vault, MAX_REWARD);
+
+        let play_id = world.next_play_id;
+        world.next_play_id = play_id + 1;
+        df::add(
+            &mut world.id,
+            PlayKey { id: play_id },
+            PlayTicket { seal, min_reward: MIN_REWARD, max_reward: MAX_REWARD }
+        );
+
+        let world_id = object::uid_to_inner(&world.id);
+        event::emit(PlayCreatedEvent { world_id, play_id, min_reward: MIN_REWARD, max_reward: MAX_REWARD, creator: sender });
+    }
+
+     entry fun claim_reward(
+        world: &mut WorldMap,
+        vault: &mut RewardVault,
+        randomness: &random::Random,
+        play_id: u64,
+        key: vector<u8>,
+        ctx: &mut TxContext
+    ) {
+        assert!(df::exists_(&world.id, PlayKey { id: play_id }), E_PLAY_NOT_FOUND);
+        assert!(vector::length(&key) > 0, E_INVALID_SEAL);
+
+        let PlayTicket { seal, min_reward, max_reward } =
+            df::remove(&mut world.id, PlayKey { id: play_id });
+        let digest = hash::sha3_256(key);
+        assert!(seal == digest, E_INVALID_SEAL);
+        assert!(max_reward >= min_reward && min_reward > 0, E_INVALID_REWARD_RANGE);
+
+        let mut rng = random::new_generator(randomness, ctx);
+        let reward = random::generate_u64_in_range(&mut rng, min_reward, max_reward);
+
+        reward_coin::unreserve(vault, max_reward);
+        let coin = reward_coin::withdraw(vault, reward, ctx);
+
+        let recipient = tx_context::sender(ctx);
+        transfer::public_transfer(coin, recipient);
+
+        let world_id = object::uid_to_inner(&world.id);
+        event::emit(RewardClaimedEvent { world_id, play_id, reward, recipient });
     }
 
     /* ================= OWNER: EDIT CHUNK ================= */

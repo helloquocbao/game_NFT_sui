@@ -13,36 +13,26 @@ import {
   WORLD_REGISTRY_ID,
 } from "../chain/config";
 import { suiClient } from "../chain/suiClient";
+import {
+  DEFAULT_GROUND_TILE_ID,
+  TILE_DEFS,
+  getTileDef,
+  normalizeTileId,
+} from "../game/tiles";
 import "./EditorGame.css";
 
 /**
  * TILE CODE
- * 0 = empty
- * 1 = wall
- * 2 = trap
- * 4 = enemy
- * 5 = floor 1
- * 6 = floor 2
- * 7 = floor 3
- * 8 = floor 4
+ * 0 = void (fall)
+ * 1.. = tilemap-slices ids (see game/tiles.ts)
  */
 
 const TILE_SIZE = 32;
 const CHUNK_SIZE = 8;
-const DEFAULT_FLOOR = 5;
+const DEFAULT_FLOOR = DEFAULT_GROUND_TILE_ID;
+const VOID_TILE_COLOR = "#0b0b0b";
 const USER_ID_KEY = "EDITOR_USER_ID";
 const RANDOM_OBJECT_ID = "0x8";
-
-const TILE_COLORS: Record<number, string> = {
-  0: "#0b0b0b",
-  1: "#8d8d8d",
-  2: "#e04a3a",
-  4: "#ff6b4a",
-  5: "#58646b",
-  6: "#697680",
-  7: "#81919b",
-  8: "#9aa9b1",
-};
 
 type ChunkOwners = Record<string, string>;
 
@@ -54,7 +44,7 @@ export default function EditorGame() {
 
   const [userId] = useState(() => getOrCreateUserId());
   const [notice, setNotice] = useState<string>("");
-  const [selectedTile, setSelectedTile] = useState<number>(1);
+  const [selectedTile, setSelectedTile] = useState<number>(DEFAULT_FLOOR);
   const [grid, setGrid] = useState<number[][]>(() => createDefaultGrid());
   const [chunkOwners, setChunkOwners] = useState<ChunkOwners>(() =>
     createOwnersForGrid(createDefaultGrid(), userId)
@@ -420,7 +410,7 @@ export default function EditorGame() {
         if (!content || content.dataType !== "moveObject") return;
         const fields = normalizeMoveFields(content.fields);
         const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
-          clampU8(parseU32Value(tile) ?? 0, 8)
+          normalizeTileId(clampU8(parseU32Value(tile) ?? 0, 255))
         );
 
         for (let y = 0; y < CHUNK_SIZE; y++) {
@@ -729,13 +719,14 @@ export default function EditorGame() {
             <div className="panel">
               <div className="panel__title">Tiles</div>
               <div className="editor-tiles">
-                {Object.entries(TILE_COLORS).map(([id, color]) => (
+                {TILE_DEFS.map((tile) => (
                   <TileButton
-                    key={id}
-                    label={id}
-                    color={color}
-                    active={selectedTile === Number(id)}
-                    onClick={() => setSelectedTile(Number(id))}
+                    key={tile.id}
+                    label={tile.name.replace("tile_", "")}
+                    image={tile.image}
+                    kind={tile.kind}
+                    active={selectedTile === tile.id}
+                    onClick={() => setSelectedTile(tile.id)}
                   />
                 ))}
               </div>
@@ -782,14 +773,12 @@ export default function EditorGame() {
                       const chunkKey = getChunkKeyFromTile(x, y);
                       const owner = chunkOwners[chunkKey];
                       const isOwned = isOwnerMatch(owner);
-                      const isSelected =
-                        isOwned && chunkKey === activeChunkKey;
+                      const isSelected = isOwned && chunkKey === activeChunkKey;
                       const isLocked =
                         isChunkModalOpen &&
                         Boolean(activeChunkKey) &&
                         chunkKey !== activeChunkKey;
-                      const isHovered =
-                        isOwned && chunkKey === hoveredChunkKey;
+                      const isHovered = isOwned && chunkKey === hoveredChunkKey;
 
                       return (
                         <button
@@ -807,7 +796,7 @@ export default function EditorGame() {
                           }
                           title={`Owner: ${owner ?? "none"}`}
                           style={{
-                            background: TILE_COLORS[cell],
+                            ...getTileStyle(cell),
                             cursor: "pointer",
                           }}
                         />
@@ -965,10 +954,7 @@ export default function EditorGame() {
 
         {isChunkModalOpen && activeChunkCoords && (
           <div className="editor-modal">
-            <div
-              className="editor-modal__backdrop"
-              onClick={closeChunkModal}
-            />
+            <div className="editor-modal__backdrop" onClick={closeChunkModal} />
             <div
               className="editor-modal__panel"
               role="dialog"
@@ -1024,7 +1010,7 @@ export default function EditorGame() {
                             className="editor-tile editor-tile--chunk"
                             onClick={() => paintModalTile(x, y)}
                             style={{
-                              background: TILE_COLORS[cell],
+                              ...getTileStyle(cell),
                               cursor: "pointer",
                             }}
                           />
@@ -1037,13 +1023,14 @@ export default function EditorGame() {
                 <div className="editor-modal__tiles">
                   <div className="panel__title">Tiles</div>
                   <div className="editor-tiles">
-                    {Object.entries(TILE_COLORS).map(([id, color]) => (
+                    {TILE_DEFS.map((tile) => (
                       <TileButton
-                        key={id}
-                        label={id}
-                        color={color}
-                        active={selectedTile === Number(id)}
-                        onClick={() => setSelectedTile(Number(id))}
+                        key={tile.id}
+                        label={tile.name.replace("tile_", "")}
+                        image={tile.image}
+                        kind={tile.kind}
+                        active={selectedTile === tile.id}
+                        onClick={() => setSelectedTile(tile.id)}
                       />
                     ))}
                   </div>
@@ -1114,6 +1101,17 @@ function createDefaultGrid() {
   return Array(CHUNK_SIZE)
     .fill(0)
     .map(() => Array(CHUNK_SIZE).fill(DEFAULT_FLOOR));
+}
+
+function getTileStyle(tileId: number) {
+  const def = getTileDef(tileId);
+  if (!def) {
+    return { background: VOID_TILE_COLOR };
+  }
+  return {
+    backgroundImage: `url(${def.image})`,
+    backgroundColor: VOID_TILE_COLOR,
+  };
 }
 
 function buildChunkTiles(grid: number[][], cx: number, cy: number) {
@@ -1285,20 +1283,25 @@ async function resolveChunkEntries(
 
 function TileButton({
   label,
-  color,
+  image,
+  kind,
   active,
   onClick,
 }: {
   label: string;
-  color: string;
+  image: string;
+  kind: "ground" | "abyssWall";
   active: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`tile-button ${active ? "tile-button--active" : ""}`}
-      style={{ background: color }}
+      className={`tile-button ${active ? "tile-button--active" : ""} ${
+        kind === "abyssWall" ? "tile-button--abyss" : ""
+      }`}
+      style={{ backgroundImage: `url(${image})` }}
+      title={`${label} (${kind === "abyssWall" ? "abyss wall" : "ground"})`}
     >
       {label}
     </button>

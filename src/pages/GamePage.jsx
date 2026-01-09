@@ -1,14 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { PACKAGE_ID, WORLD_REGISTRY_ID } from "../chain/config";
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
+import { sha3_256 } from "@noble/hashes/sha3";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+import {
+  PACKAGE_ID,
+  RANDOM_OBJECT_ID,
+  REWARD_COIN_TYPE,
+  REWARD_VAULT_ID,
+  WORLD_REGISTRY_ID,
+} from "../chain/config";
 import { suiClient } from "../chain/suiClient";
 import { startGame } from "../game/start";
+import { isWalkableTile, normalizeTileId } from "../game/tiles";
 import "./GamePage.css";
 
 const TILE_SIZE = 32;
 const CHUNK_SIZE = 8;
+const PLAY_FEE = 5n;
+const PLAY_STATE_KEY = "PLAY_STATE";
+const PLAY_TARGET_KEY = "PLAY_TARGET";
 
 export default function GamePage() {
+  const account = useCurrentAccount();
+  const { mutateAsync: signAndExecute, isPending } =
+    useSignAndExecuteTransaction();
   const [worldId, setWorldId] = useState("");
   const [worldList, setWorldList] = useState([]);
   const [worldListError, setWorldListError] = useState("");
@@ -17,9 +38,34 @@ export default function GamePage() {
   const [mapLoadError, setMapLoadError] = useState("");
   const [isMapLoading, setIsMapLoading] = useState(false);
   const [loadedChunks, setLoadedChunks] = useState(null);
+  const [rewardBalance, setRewardBalance] = useState("0");
+  const [playId, setPlayId] = useState("");
+  const [playKeyHex, setPlayKeyHex] = useState("");
+  const [playNotice, setPlayNotice] = useState("");
+  const [playError, setPlayError] = useState("");
+  const [claimError, setClaimError] = useState("");
+  const [isKeyFound, setIsKeyFound] = useState(false);
+  const [isPlayBusy, setIsPlayBusy] = useState(false);
+  const [isClaimBusy, setIsClaimBusy] = useState(false);
 
   useEffect(() => {
     startGame();
+  }, []);
+
+  useEffect(() => {
+    const stored = loadPlayState();
+    const target = loadPlayTarget();
+    if (stored) {
+      setPlayId(stored.playId);
+      setPlayKeyHex(stored.keyHex);
+    }
+    setIsKeyFound(Boolean(target?.found));
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setIsKeyFound(true);
+    window.addEventListener("game:key-found", handler);
+    return () => window.removeEventListener("game:key-found", handler);
   }, []);
 
   useEffect(() => {
@@ -35,12 +81,17 @@ export default function GamePage() {
     }
   }, [worldId, selectedWorldId]);
 
+  useEffect(() => {
+    void loadRewardBalance();
+  }, [account?.address]);
+
   const worldListOptions = useMemo(() => {
     const ids = new Set();
     if (worldId) ids.add(worldId);
     worldList.forEach((id) => ids.add(id));
     return Array.from(ids);
   }, [worldId, worldList]);
+  const isWalletBusy = isPending || isPlayBusy || isClaimBusy;
 
   async function loadWorldId() {
     setWorldListError("");
@@ -130,6 +181,85 @@ export default function GamePage() {
     }
   }
 
+  async function loadRewardBalance() {
+    if (!account?.address || !REWARD_COIN_TYPE) {
+      setRewardBalance("0");
+      return;
+    }
+
+    try {
+      const coins = await suiClient.getCoins({
+        owner: account.address,
+        coinType: REWARD_COIN_TYPE,
+      });
+      const total = coins.data.reduce(
+        (sum, coin) => sum + BigInt(coin.balance),
+        0n
+      );
+      setRewardBalance(total.toString());
+    } catch (error) {
+      console.error(error);
+      setRewardBalance("0");
+    }
+  }
+
+  async function getPlayableCoin() {
+    if (!account?.address || !REWARD_COIN_TYPE) return null;
+    const coins = await suiClient.getCoins({
+      owner: account.address,
+      coinType: REWARD_COIN_TYPE,
+    });
+    return (
+      coins.data.find((coin) => BigInt(coin.balance) >= PLAY_FEE) ?? null
+    );
+  }
+
+  function storePlayState(nextState) {
+    localStorage.setItem(PLAY_STATE_KEY, JSON.stringify(nextState));
+  }
+
+  function loadPlayState() {
+    const raw = localStorage.getItem(PLAY_STATE_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  }
+
+  function clearPlayState() {
+    localStorage.removeItem(PLAY_STATE_KEY);
+    localStorage.removeItem(PLAY_TARGET_KEY);
+  }
+
+  function storePlayTarget(target) {
+    localStorage.setItem(PLAY_TARGET_KEY, JSON.stringify(target));
+  }
+
+  function loadPlayTarget() {
+    const raw = localStorage.getItem(PLAY_TARGET_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  }
+
+  function reloadGameFromStorage() {
+    const raw = localStorage.getItem("CUSTOM_MAP");
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      startGame(parsed);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
   async function loadWorldMap(targetWorldId) {
     setMapLoadError("");
     setIsMapLoading(true);
@@ -174,7 +304,7 @@ export default function GamePage() {
         if (!content || content.dataType !== "moveObject") return;
         const fields = normalizeMoveFields(content.fields);
         const tiles = normalizeMoveVector(fields.tiles).map((tile) =>
-          clampU8(parseU32Value(tile) ?? 0, 8)
+          normalizeTileId(clampU8(parseU32Value(tile) ?? 0, 255))
         );
 
         for (let y = 0; y < CHUNK_SIZE; y++) {
@@ -191,6 +321,7 @@ export default function GamePage() {
         width,
         height,
         grid: newGrid,
+        worldId: targetWorldId,
       };
       localStorage.setItem("CUSTOM_MAP", JSON.stringify(mapData));
       startGame(mapData);
@@ -199,6 +330,198 @@ export default function GamePage() {
       setMapLoadError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsMapLoading(false);
+    }
+  }
+
+  function pickKeyTarget() {
+    const raw = localStorage.getItem("CUSTOM_MAP");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      const grid = Array.isArray(parsed.grid) ? parsed.grid : [];
+      const floors = [];
+      for (let y = 0; y < grid.length; y += 1) {
+        const row = grid[y] ?? [];
+        for (let x = 0; x < row.length; x += 1) {
+          if (isWalkableTile(Number(row[x]))) {
+            floors.push({ x, y });
+          }
+        }
+      }
+      if (!floors.length) return null;
+      return floors[Math.floor(Math.random() * floors.length)];
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  }
+
+  async function handlePlayOnChain() {
+    setPlayError("");
+    setPlayNotice("");
+    setClaimError("");
+
+    if (!account?.address) {
+      setPlayError("Connect wallet first.");
+      return;
+    }
+    if (!PACKAGE_ID || !REWARD_VAULT_ID) {
+      setPlayError("Missing package or reward vault id.");
+      return;
+    }
+    const activeWorldId = selectedWorldId || worldId;
+    if (!activeWorldId) {
+      setPlayError("Select a world first.");
+      return;
+    }
+
+    const playableCoin = await getPlayableCoin();
+    if (!playableCoin) {
+      setPlayError("Need at least 5 CHUNK coin to play.");
+      return;
+    }
+
+    const keyBytes = new Uint8Array(16);
+    crypto.getRandomValues(keyBytes);
+    const sealBytes = sha3_256(keyBytes);
+    const sealVector = Array.from(sealBytes);
+    const keyHex = bytesToHex(keyBytes);
+
+    setIsPlayBusy(true);
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${PACKAGE_ID}::world::play`,
+        arguments: [
+          tx.object(activeWorldId),
+          tx.object(REWARD_VAULT_ID),
+          tx.object(playableCoin.coinObjectId),
+          tx.pure.vector("u8", sealVector),
+        ],
+      });
+
+      const result = await signAndExecute({ transaction: tx });
+      const txBlock = await suiClient.getTransactionBlock({
+        digest: result.digest,
+        options: { showEvents: true },
+      });
+      const eventType = `${PACKAGE_ID}::world::PlayCreatedEvent`;
+      const playEvent = txBlock.events?.find(
+        (event) => event.type === eventType
+      );
+      const parsed = playEvent?.parsedJson ?? {};
+      const nextPlayId =
+        typeof parsed.play_id === "string"
+          ? parsed.play_id
+          : typeof parsed.play_id === "number"
+          ? String(parsed.play_id)
+          : "";
+
+      if (!nextPlayId) {
+        setPlayError("Play created but play_id not found.");
+        return;
+      }
+
+      const target = pickKeyTarget();
+      if (target) {
+        storePlayTarget({ ...target, worldId: activeWorldId, found: false });
+      }
+
+      storePlayState({
+        playId: nextPlayId,
+        keyHex,
+        worldId: activeWorldId,
+        found: false,
+      });
+      setPlayId(nextPlayId);
+      setPlayKeyHex(keyHex);
+      setIsKeyFound(false);
+      reloadGameFromStorage();
+      setPlayNotice(
+        target
+          ? `Key hidden at tile (${target.x}, ${target.y}).`
+          : "Key generated. Load a map to hide it."
+      );
+      await loadRewardBalance();
+    } catch (error) {
+      setPlayError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsPlayBusy(false);
+    }
+  }
+
+  async function handleClaimOnChain() {
+    setClaimError("");
+    setPlayNotice("");
+
+    if (!account?.address) {
+      setClaimError("Connect wallet first.");
+      return;
+    }
+    if (!PACKAGE_ID || !REWARD_VAULT_ID || !RANDOM_OBJECT_ID) {
+      setClaimError("Missing chain config for claim.");
+      return;
+    }
+    if (!playId || !playKeyHex) {
+      setClaimError("No active play found.");
+      return;
+    }
+    if (!isKeyFound) {
+      setClaimError("Find the hidden key in game first.");
+      return;
+    }
+
+    const activeWorldId = selectedWorldId || worldId;
+    if (!activeWorldId) {
+      setClaimError("Select a world first.");
+      return;
+    }
+
+    const keyBytes = Array.from(hexToBytes(playKeyHex));
+
+    setIsClaimBusy(true);
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${PACKAGE_ID}::world::claim_reward`,
+        arguments: [
+          tx.object(activeWorldId),
+          tx.object(REWARD_VAULT_ID),
+          tx.object(RANDOM_OBJECT_ID),
+          tx.pure.u64(BigInt(playId)),
+          tx.pure.vector("u8", keyBytes),
+        ],
+      });
+
+      const result = await signAndExecute({ transaction: tx });
+      const txBlock = await suiClient.getTransactionBlock({
+        digest: result.digest,
+        options: { showEvents: true },
+      });
+      const eventType = `${PACKAGE_ID}::world::RewardClaimedEvent`;
+      const rewardEvent = txBlock.events?.find(
+        (event) => event.type === eventType
+      );
+      const parsed = rewardEvent?.parsedJson ?? {};
+      const rewardValue =
+        typeof parsed.reward === "string"
+          ? parsed.reward
+          : typeof parsed.reward === "number"
+          ? String(parsed.reward)
+          : "";
+
+      clearPlayState();
+      setPlayId("");
+      setPlayKeyHex("");
+      setIsKeyFound(false);
+      setPlayNotice(
+        rewardValue ? `Claimed ${rewardValue} CHUNK.` : "Claimed reward."
+      );
+      await loadRewardBalance();
+    } catch (error) {
+      setClaimError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsClaimBusy(false);
     }
   }
 
@@ -282,6 +605,40 @@ export default function GamePage() {
             {mapLoadError && (
               <div className="game-info__error">{mapLoadError}</div>
             )}
+
+            <div className="game-info__title">Wallet</div>
+            <div className="game-info__card">
+              <span>Reward balance</span>
+              <span>{rewardBalance}</span>
+            </div>
+            <ConnectButton />
+
+            <div className="game-info__title">Rewards</div>
+            <div className="game-info__card">
+              <span>Play id</span>
+              <span>{playId || "-"}</span>
+            </div>
+            <div className="game-info__card">
+              <span>Key status</span>
+              <span>{isKeyFound ? "found" : playId ? "hidden" : "-"}</span>
+            </div>
+            <button
+              className="game-btn game-btn--primary"
+              onClick={handlePlayOnChain}
+              disabled={isWalletBusy || !account?.address}
+            >
+              {isPlayBusy ? "Starting..." : "Start play (5 coin)"}
+            </button>
+            <button
+              className="game-btn"
+              onClick={handleClaimOnChain}
+              disabled={!playId || !isKeyFound || isWalletBusy}
+            >
+              {isClaimBusy ? "Claiming..." : "Claim reward"}
+            </button>
+            {playNotice && <div className="game-info__note">{playNotice}</div>}
+            {playError && <div className="game-info__error">{playError}</div>}
+            {claimError && <div className="game-info__error">{claimError}</div>}
 
             <div className="game-info__title">Controls</div>
             <div className="game-info__card">

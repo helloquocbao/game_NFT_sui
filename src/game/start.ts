@@ -1,12 +1,23 @@
 /// <reference types="kaboom/global" />
 import kaboom, { GameObj } from "kaboom";
+import {
+  TILE_DEFS,
+  TILE_SPRITE_SIZE,
+  getTileDef,
+  isTileDefined,
+  isWalkableTile,
+} from "./tiles";
 
 let started = false;
 const TILE = 32;
+const CHUNK_SIZE = 16;
+const PLAY_STATE_KEY = "PLAY_STATE";
+const PLAY_TARGET_KEY = "PLAY_TARGET";
 
 type GameMapData = {
   tileSize: number;
   grid: number[][];
+  worldId?: string;
 };
 
 export function startGame(mapData?: GameMapData) {
@@ -23,16 +34,17 @@ export function startGame(mapData?: GameMapData) {
     canvas: document.getElementById("game") as HTMLCanvasElement,
     width: 960,
     height: 540,
-    background: [0, 0, 0],
+    background: [203, 232, 255],
     scale: 1,
   });
-
+  debug.inspect = true;
+  debug.showArea = true;
   /* ================= SPRITES ================= */
 
   loadSprite("player-idle", "/sprites/player/Idle.png", {
-    sliceX: 4,
+    sliceX: 8,
     anims: {
-      idle: { from: 0, to: 3, speed: 6, loop: true },
+      idle: { from: 0, to: 7, speed: 15, loop: true },
     },
   });
 
@@ -44,10 +56,14 @@ export function startGame(mapData?: GameMapData) {
   });
 
   loadSprite("player-attack", "/sprites/player/Attack.png", {
-    sliceX: 6,
+    sliceX: 4,
     anims: {
-      attack: { from: 0, to: 5, speed: 12 },
+      attack: { from: 0, to: 3, speed: 12 },
     },
+  });
+
+  TILE_DEFS.forEach((tile) => {
+    loadSprite(tile.name, tile.image);
   });
 
   /* ================= MAP ================= */
@@ -64,28 +80,33 @@ export function startGame(mapData?: GameMapData) {
     }
   }
 
-  function gridToLevel(grid: number[][]) {
-    return grid.map((row) =>
-      row
-        .map((c) => {
-          if (c === 1) return "#";
-          if (c === 2) return "^";
-          if (c >= 5) return "=";
-          return ".";
-        })
-        .join("")
-    );
-  }
-
   function findSpawn(grid: number[][], size: number) {
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] >= 5) {
+        if (isWalkableTile(grid[y][x])) {
           return vec2(x * size + size / 2, y * size + size / 2);
         }
       }
     }
     return vec2(64, 64);
+  }
+
+  function drawTiles(grid: number[][], tileSize: number) {
+    const scaleFactor = tileSize / TILE_SPRITE_SIZE;
+    for (let y = 0; y < grid.length; y++) {
+      for (let x = 0; x < grid[y].length; x++) {
+        const tileId = grid[y][x];
+        const tileDef = getTileDef(tileId);
+        if (!tileDef) continue;
+        add([
+          sprite(tileDef.name),
+          pos(x * tileSize, y * tileSize),
+          anchor("topleft"),
+          scale(scaleFactor),
+          tileDef.kind === "abyssWall" ? "abyss-wall" : "ground",
+        ]);
+      }
+    }
   }
 
   /* ================= SCENE ================= */
@@ -99,38 +120,71 @@ export function startGame(mapData?: GameMapData) {
 
     const tileSize = resolvedMap.tileSize || TILE;
     const spawnPos = findSpawn(resolvedMap.grid, tileSize);
-    const level = gridToLevel(resolvedMap.grid);
-
-    addLevel(level, {
-      tileWidth: tileSize,
-      tileHeight: tileSize,
-      tiles: {
-        "#": () => [rect(TILE, TILE), area(), color(120, 120, 120), "wall"],
-        "^": () => [rect(TILE, TILE), area(), color(255, 0, 0), "trap"],
-        "=": () => [rect(TILE, TILE), "floor"],
-      },
-    });
+    drawTiles(resolvedMap.grid, tileSize);
 
     /* ================= PLAYER ================= */
 
     const player = add([
       sprite("player-idle", { anim: "idle" }),
       pos(spawnPos),
-      area(),
+      area({ shape: new Rect(vec2(0), 65, 70) }),
       anchor("center"),
       {
         speed: 200,
         facing: 1, // 1 right, -1 left
         attacking: false,
       },
+      scale(0.5),
       "player",
     ]);
+
+    const playTarget = loadPlayTarget();
+    const playState = loadPlayState();
+    const worldMatch =
+      !playTarget?.worldId ||
+      !resolvedMap.worldId ||
+      playTarget.worldId === resolvedMap.worldId;
+    if (
+      playTarget &&
+      worldMatch &&
+      !playTarget.found &&
+      Number.isFinite(playTarget.x) &&
+      Number.isFinite(playTarget.y) &&
+      isWalkableTile(resolvedMap.grid[playTarget.y]?.[playTarget.x] ?? 0)
+    ) {
+      const keyPos = vec2(
+        playTarget.x * tileSize + tileSize / 2,
+        playTarget.y * tileSize + tileSize / 2
+      );
+      const keyObj = add([
+        rect(tileSize * 0.6, tileSize * 0.6),
+        pos(keyPos),
+        area(),
+        anchor("center"),
+        color(250, 210, 72),
+        "key",
+      ]);
+      let keyFound = false;
+      player.onCollide("key", () => {
+        if (keyFound) return;
+        keyFound = true;
+        keyObj.destroy();
+        markKeyFound(playTarget, playState?.playId);
+      });
+    }
 
     onUpdate(() => camPos(player.pos));
 
     /* ================= INPUT STATE ================= */
 
     let moveDir = vec2(0, 0);
+    let isFalling = false;
+
+    function handleFallDeath() {
+      if (isFalling) return;
+      isFalling = true;
+      go("game", { mapData: resolvedMap });
+    }
 
     onKeyDown("a", () => {
       moveDir.x = -1;
@@ -147,10 +201,20 @@ export function startGame(mapData?: GameMapData) {
 
     /* ================= MOVE ================= */
 
-    function canMove(pos: Vec2) {
+    function getTileIdAt(pos: Vec2) {
       const x = Math.floor(pos.x / tileSize);
       const y = Math.floor(pos.y / tileSize);
-      return resolvedMap.grid[y]?.[x] >= 5;
+      if (y < 0 || y >= resolvedMap.grid.length) return null;
+      if (x < 0 || x >= (resolvedMap.grid[y]?.length ?? 0)) return null;
+      const value = resolvedMap.grid[y]?.[x];
+      return typeof value === "number" ? value : null;
+    }
+
+    function canMove(pos: Vec2) {
+      const tileId = getTileIdAt(pos);
+      if (tileId === null) return true;
+      if (!isTileDefined(tileId)) return true;
+      return isWalkableTile(tileId);
     }
 
     /* ================= ATTACK ================= */
@@ -158,7 +222,7 @@ export function startGame(mapData?: GameMapData) {
     function spawnAttackHitbox() {
       add([
         pos(player.pos.x + player.facing * 22, player.pos.y),
-        area({ shape: new Rect(vec2(0), 16, 20) }),
+        area({ shape: new Rect(vec2(0), 20, 40) }),
         anchor("center"),
         lifespan(0.1),
         "attack",
@@ -192,6 +256,12 @@ export function startGame(mapData?: GameMapData) {
       }
 
       /* ---- FLIP (1 nơi duy nhất) ---- */
+      const currentTile = getTileIdAt(player.pos);
+      if (currentTile === null || !isTileDefined(currentTile)) {
+        handleFallDeath();
+        return;
+      }
+
       player.flipX = player.facing === -1;
 
       /* ---- ANIMATION FSM ---- */
@@ -222,4 +292,41 @@ export function startGame(mapData?: GameMapData) {
   } else {
     go("game");
   }
+}
+
+function loadPlayState(): { playId?: string } | null {
+  const raw = localStorage.getItem(PLAY_STATE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+function loadPlayTarget(): {
+  x: number;
+  y: number;
+  found?: boolean;
+  worldId?: string;
+} | null {
+  const raw = localStorage.getItem(PLAY_TARGET_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
+function markKeyFound(target: { x: number; y: number }, playId?: string) {
+  localStorage.setItem(
+    PLAY_TARGET_KEY,
+    JSON.stringify({ ...target, found: true })
+  );
+  window.dispatchEvent(
+    new CustomEvent("game:key-found", { detail: { playId } })
+  );
 }

@@ -27,16 +27,17 @@ export function startGame(mapData?: GameMapData) {
     canvas: document.getElementById("game") as HTMLCanvasElement,
     width: 960,
     height: 540,
-    background: [0, 0, 0],
+    background: [203, 232, 255],
     scale: 1,
   });
-
+  debug.inspect = true;
+  debug.showArea = true;
   /* ================= SPRITES ================= */
 
   loadSprite("player-idle", "/sprites/player/Idle.png", {
     sliceX: 8,
     anims: {
-      idle: { from: 0, to: 0, speed: 7, loop: true },
+      idle: { from: 0, to: 7, speed: 15, loop: true },
     },
   });
 
@@ -198,7 +199,7 @@ export function startGame(mapData?: GameMapData) {
     function spawnAttackHitbox() {
       add([
         pos(player.pos.x + player.facing * 22, player.pos.y),
-        area({ shape: new Rect(vec2(0), 16, 20) }),
+        area({ shape: new Rect(vec2(0), 20, 40) }),
         anchor("center"),
         lifespan(0.1),
         "attack",

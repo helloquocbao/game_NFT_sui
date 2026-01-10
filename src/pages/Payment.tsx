@@ -1,4 +1,3 @@
-import React from "react";
 import { CheckoutWidget } from "@beep-it/checkout-widget";
 
 export default function Payment() {
@@ -12,10 +11,10 @@ export default function Payment() {
       }}
       assets={[
         {
-          assetId: "8a5fb17e-acb4-4b50-bae5-fcfe0e689420",
+          price: "0.2",
           quantity: 1,
-          name: "Premium Coffee",
-          description: "Fresh roasted arabica beans",
+          name: "Play turm",
+          description: "Buy the turn game game",
         },
       ]}
     />

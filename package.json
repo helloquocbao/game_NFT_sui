@@ -10,8 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@beep-it/checkout-widget": "^0.1.6",
-    "@beep-it/sdk-core": "^0.1.7",
     "@mysten/dapp-kit": "^0.19.11",
     "@mysten/sui": "^1.45.2",
     "@mysten/walrus": "^0.8.6",

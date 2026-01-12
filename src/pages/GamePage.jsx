@@ -44,13 +44,24 @@ export default function GamePage() {
   const [playNotice, setPlayNotice] = useState("");
   const [playError, setPlayError] = useState("");
   const [claimError, setClaimError] = useState("");
+  const [claimCheckMessage, setClaimCheckMessage] = useState("");
   const [isKeyFound, setIsKeyFound] = useState(false);
   const [isPlayBusy, setIsPlayBusy] = useState(false);
   const [isClaimBusy, setIsClaimBusy] = useState(false);
+  const [isClaimCheckBusy, setIsClaimCheckBusy] = useState(false);
 
   useEffect(() => {
     startGame();
+    handletests();
   }, []);
+
+  const handletests = async () => {
+    const txBlock = await suiClient.getTransactionBlock({
+      digest: "B7GqNSUhjSyS6qkSuMH6RgEC4GTetWuCiYMqErwX4kG8",
+      options: { showEvents: true },
+    });
+    console.log(txBlock);
+  };
 
   useEffect(() => {
     const stored = loadPlayState();
@@ -67,6 +78,44 @@ export default function GamePage() {
     window.addEventListener("game:key-found", handler);
     return () => window.removeEventListener("game:key-found", handler);
   }, []);
+
+  useEffect(() => {
+    if (!playId || !PACKAGE_ID) {
+      setClaimCheckMessage("");
+      setIsClaimCheckBusy(false);
+      return;
+    }
+
+    let isActive = true;
+    setClaimCheckMessage("Checking reward status on-chain...");
+    setIsClaimCheckBusy(true);
+
+    void (async () => {
+      try {
+        const claimed = await hasRewardBeenClaimed(playId);
+        if (!isActive) return;
+        if (claimed) {
+          resetPlayState("Reward already claimed on-chain.");
+          setClaimCheckMessage("This play already has a claim recorded.");
+        } else {
+          setClaimCheckMessage("No claim event found yet for this play.");
+        }
+      } catch (error) {
+        if (!isActive) return;
+        setClaimCheckMessage(
+          error instanceof Error ? error.message : String(error)
+        );
+      } finally {
+        if (isActive) {
+          setIsClaimCheckBusy(false);
+        }
+      }
+    })();
+
+    return () => {
+      isActive = false;
+    };
+  }, [playId]);
 
   useEffect(() => {
     void (async () => {
@@ -209,9 +258,7 @@ export default function GamePage() {
       owner: account.address,
       coinType: REWARD_COIN_TYPE,
     });
-    return (
-      coins.data.find((coin) => BigInt(coin.balance) >= PLAY_FEE) ?? null
-    );
+    return coins.data.find((coin) => BigInt(coin.balance) >= PLAY_FEE) ?? null;
   }
 
   function storePlayState(nextState) {
@@ -232,6 +279,16 @@ export default function GamePage() {
   function clearPlayState() {
     localStorage.removeItem(PLAY_STATE_KEY);
     localStorage.removeItem(PLAY_TARGET_KEY);
+  }
+
+  function resetPlayState(nextNotice) {
+    clearPlayState();
+    setPlayId("");
+    setPlayKeyHex("");
+    setIsKeyFound(false);
+    if (nextNotice) {
+      setPlayNotice(nextNotice);
+    }
   }
 
   function storePlayTarget(target) {
@@ -401,14 +458,18 @@ export default function GamePage() {
       });
 
       const result = await signAndExecute({ transaction: tx });
+      console.log("result", result);
       const txBlock = await suiClient.getTransactionBlock({
         digest: result.digest,
         options: { showEvents: true },
       });
+      console.log("txBlock", txBlock);
       const eventType = `${PACKAGE_ID}::world::PlayCreatedEvent`;
+      console.log("eventType", eventType);
       const playEvent = txBlock.events?.find(
         (event) => event.type === eventType
       );
+      console.log("playEvent", playEvent);
       const parsed = playEvent?.parsedJson ?? {};
       const nextPlayId =
         typeof parsed.play_id === "string"
@@ -416,7 +477,7 @@ export default function GamePage() {
           : typeof parsed.play_id === "number"
           ? String(parsed.play_id)
           : "";
-
+      console.log("nextPlayId", nextPlayId);
       if (!nextPlayId) {
         setPlayError("Play created but play_id not found.");
         return;
@@ -510,11 +571,7 @@ export default function GamePage() {
           ? String(parsed.reward)
           : "";
 
-      clearPlayState();
-      setPlayId("");
-      setPlayKeyHex("");
-      setIsKeyFound(false);
-      setPlayNotice(
+      resetPlayState(
         rewardValue ? `Claimed ${rewardValue} CHUNK.` : "Claimed reward."
       );
       await loadRewardBalance();
@@ -522,6 +579,38 @@ export default function GamePage() {
       setClaimError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsClaimBusy(false);
+    }
+  }
+
+  async function handleVerifyClaimStatus() {
+    setClaimError("");
+
+    if (!playId) {
+      setClaimCheckMessage("No active play to verify.");
+      return;
+    }
+    if (!PACKAGE_ID) {
+      setClaimCheckMessage("Missing package id for event search.");
+      return;
+    }
+    if (isClaimCheckBusy) return;
+
+    setClaimCheckMessage("Checking reward status on-chain...");
+    setIsClaimCheckBusy(true);
+    try {
+      const claimed = await hasRewardBeenClaimed(playId);
+      if (claimed) {
+        resetPlayState("Reward already claimed on-chain.");
+        setClaimCheckMessage("Reward was already claimed for that play.");
+      } else {
+        setClaimCheckMessage("No claim event found yet for this play.");
+      }
+    } catch (error) {
+      setClaimCheckMessage(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setIsClaimCheckBusy(false);
     }
   }
 
@@ -636,9 +725,19 @@ export default function GamePage() {
             >
               {isClaimBusy ? "Claiming..." : "Claim reward"}
             </button>
+            <button
+              className="game-btn"
+              onClick={handleVerifyClaimStatus}
+              disabled={!playId || isWalletBusy || isClaimCheckBusy}
+            >
+              {isClaimCheckBusy ? "Checking..." : "Verify claim status"}
+            </button>
             {playNotice && <div className="game-info__note">{playNotice}</div>}
             {playError && <div className="game-info__error">{playError}</div>}
             {claimError && <div className="game-info__error">{claimError}</div>}
+            {claimCheckMessage && (
+              <div className="game-info__note">{claimCheckMessage}</div>
+            )}
 
             <div className="game-info__title">Controls</div>
             <div className="game-info__card">
@@ -766,4 +865,51 @@ async function resolveChunkEntries(worldId, fields) {
     .filter((result) => result.status === "fulfilled")
     .map((result) => result.value)
     .filter((entry) => Boolean(entry));
+}
+
+function matchesPlayId(parsedJson, targetPlayId) {
+  if (!targetPlayId || !parsedJson || typeof parsedJson !== "object") {
+    return false;
+  }
+  const record = parsedJson;
+  const candidate =
+    typeof record.play_id === "string"
+      ? record.play_id
+      : typeof record.play_id === "number"
+      ? String(record.play_id)
+      : typeof record.playId === "string"
+      ? record.playId
+      : typeof record.playId === "number"
+      ? String(record.playId)
+      : "";
+  return candidate === targetPlayId;
+}
+
+async function hasRewardBeenClaimed(targetPlayId) {
+  if (!targetPlayId || !PACKAGE_ID) return false;
+  const eventType = `${PACKAGE_ID}::world::RewardClaimedEvent`;
+  let cursor = null;
+  let rounds = 0;
+  const limit = 50;
+  const maxRounds = 6;
+
+  while (rounds < maxRounds) {
+    const page = await suiClient.queryEvents({
+      query: { MoveEventType: eventType },
+      cursor: cursor ?? undefined,
+      limit,
+      order: "descending",
+    });
+    const events = page.data ?? [];
+
+    if (events.some((event) => matchesPlayId(event.parsedJson, targetPlayId))) {
+      return true;
+    }
+
+    if (!page.hasNextPage || !page.nextCursor) break;
+    cursor = page.nextCursor;
+    rounds += 1;
+  }
+
+  return false;
 }
